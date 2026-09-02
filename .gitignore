@@ -1,0 +1,22 @@
+# Secrets & credentials
+.env
+gmail_credentials.json
+gmail_token*.json
+
+# Personal data (per-profile, never commit)
+profiles.json
+resumes.json
+applied_jobs.csv
+sent_emails.csv
+
+# Debug artifacts
+debug_*.png
+debug_*.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store

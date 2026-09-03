@@ -8,6 +8,8 @@ profiles.json
 resumes.json
 applied_jobs.csv
 sent_emails.csv
+linkedin_config.json
+linkedin_sent.csv
 
 # Debug artifacts
 debug_*.png

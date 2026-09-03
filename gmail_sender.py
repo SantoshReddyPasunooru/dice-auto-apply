@@ -1,8 +1,10 @@
 """
 Gmail integration for Dice Auto Apply.
-- Sends recruiter outreach emails when an email address is found in a job posting
-- Checks inbox for recruiter replies
-- Tracks sent emails per profile to avoid duplicates
+Each profile gets its own GmailSender instance so parallel runs
+never share state (service, sent-email set, resume pool).
+
+Module-level functions delegate to a default instance for backward
+compatibility with main.py (which is single-profile / sequential).
 """
 
 import base64
@@ -20,213 +22,197 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
 ]
 
-CREDS_PATH    = Path(__file__).parent / "gmail_credentials.json"
-RESUMES_JSON  = Path(__file__).parent / "resumes.json"
-TOKEN_PATH: Path | None = None
+CREDS_PATH   = Path(__file__).parent / "gmail_credentials.json"
+RESUMES_JSON = Path(__file__).parent / "resumes.json"
 
 SENT_CSV_HEADERS = ["timestamp", "to_email", "job_title", "company", "job_url", "resume_used"]
 
-_service = None
-
-SENT_EMAILS:   set[str] = set()
-SENT_CSV:      Path | None = None
-SENDER_NAME:   str = "Applicant"
-SENDER_EMAIL:  str = ""
-
-
-# ── Auth ─────────────────────────────────────────────────────────────────────
-
-def get_gmail_service():
-    global _service
-    if _service:
-        return _service
-    if not CREDS_PATH.exists():
-        return None
-    if TOKEN_PATH is None:
-        return None
-    try:
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from googleapiclient.discovery import build
-
-        creds = None
-        if TOKEN_PATH.exists():
-            creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
-                creds = flow.run_local_server(port=0)
-            TOKEN_PATH.write_text(creds.to_json())
-
-        _service = build("gmail", "v1", credentials=creds)
-        return _service
-    except Exception as e:
-        print(f"  [Gmail] auth error: {e}")
-        return None
-
-
-# ── Per-profile init ─────────────────────────────────────────────────────────
-
 _STOPWORDS = {"a","an","the","for","at","in","of","and","or","with","to",
               "is","be","as","on","by","from","this","that","are","was"}
-
-_RESUME_FOLDER:  Path | None = None
-_DEFAULT_RESUME: Path | None = None
-_ALL_RESUMES:    list[Path]  = []   # all PDFs in the folder, scanned once
+_SKIP_ADDRS = ["noreply","no-reply","donotreply","support@","info@","hello@",
+               "contact@","careers@dice","dice.com","example.com","sentry.io"]
 
 
-def init_gmail(profile_dir: Path, sender_name: str = "Applicant",
-               sender_email: str = "", resume_path: str = ""):
-    """Call once at startup with the profile's session directory."""
-    global SENT_CSV, SENT_EMAILS, TOKEN_PATH, _service
-    global SENDER_NAME, SENDER_EMAIL
-    global _RESUME_FOLDER, _DEFAULT_RESUME, _ALL_RESUMES
+# ── Per-profile class ─────────────────────────────────────────────────────────
 
-    TOKEN_PATH    = profile_dir / "gmail_token.json"
-    _service      = None
-    SENT_CSV      = profile_dir / "sent_emails.csv"
-    SENT_EMAILS   = set()
-    SENDER_NAME   = sender_name.strip() or "Applicant"
-    SENDER_EMAIL  = sender_email.strip().lower()
+class GmailSender:
+    """Isolated Gmail state for one sender profile."""
 
-    # Load folder config from resumes.json
-    _RESUME_FOLDER  = None
-    _DEFAULT_RESUME = None
-    _ALL_RESUMES    = []
+    def __init__(self):
+        self._service      = None
+        self.sent_emails:  set[str]     = set()
+        self.sent_csv:     Path | None  = None
+        self.sender_name:  str          = "Applicant"
+        self.sender_email: str          = ""
+        self.token_path:   Path | None  = None
+        self._resume_folder:  Path | None = None
+        self._default_resume: Path | None = None
+        self._all_resumes:    list[Path]  = []
 
-    if RESUMES_JSON.exists():
+    # ── Init ──────────────────────────────────────────────────────────────────
+
+    def init(self, profile_dir: Path, sender_name: str = "Applicant",
+             sender_email: str = "", resume_path: str = ""):
+        self.token_path    = profile_dir / "gmail_token.json"
+        self._service      = None
+        self.sent_csv      = profile_dir / "sent_emails.csv"
+        self.sent_emails   = set()
+        self.sender_name   = sender_name.strip() or "Applicant"
+        self.sender_email  = sender_email.strip().lower()
+        self._resume_folder  = None
+        self._default_resume = None
+        self._all_resumes    = []
+
+        if RESUMES_JSON.exists():
+            try:
+                data    = json.loads(RESUMES_JSON.read_text())
+                profile = data.get(self.sender_email, {})
+                folder  = profile.get("resume_folder", "")
+                default = profile.get("default_resume", "")
+
+                if folder:
+                    fp = Path(folder).expanduser()
+                    if fp.is_dir():
+                        self._resume_folder = fp
+                        self._all_resumes   = sorted(
+                            list(fp.rglob("*.pdf")) + list(fp.rglob("*.docx"))
+                        )
+                        print(f"  Gmail resume folder: {fp} ({len(self._all_resumes)} resumes found)")
+                    else:
+                        print(f"  [Gmail] Resume folder not found: {fp}")
+
+                if default:
+                    dp = Path(default).expanduser()
+                    self._default_resume = dp if dp.exists() else None
+                    if not self._default_resume:
+                        print(f"  [Gmail] Default resume not found: {dp}")
+
+            except Exception as e:
+                print(f"  [Gmail] resumes.json error: {e}")
+
+        if not self.sent_csv.exists():
+            with open(self.sent_csv, "w", newline="", encoding="utf-8") as f:
+                csv.DictWriter(f, fieldnames=SENT_CSV_HEADERS).writeheader()
+            return
+
         try:
-            data    = json.loads(RESUMES_JSON.read_text())
-            profile = data.get(SENDER_EMAIL, {})
-            folder  = profile.get("resume_folder", "")
-            default = profile.get("default_resume", "")
+            with open(self.sent_csv, "r", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    email = row.get("to_email", "").strip().lower()
+                    if email:
+                        self.sent_emails.add(email)
+        except Exception:
+            pass
 
-            if folder:
-                fp = Path(folder).expanduser()
-                if fp.is_dir():
-                    _RESUME_FOLDER = fp
-                    _ALL_RESUMES   = sorted(
-                        list(fp.rglob("*.pdf")) + list(fp.rglob("*.docx"))
-                    )
-                    print(f"  Gmail resume folder: {fp} ({len(_ALL_RESUMES)} resumes found)")
+        if self.sent_emails:
+            print(f"  Gmail tracker: {len(self.sent_emails)} recruiter(s) already contacted.\n")
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+
+    def get_service(self):
+        if self._service:
+            return self._service
+        if not CREDS_PATH.exists():
+            return None
+        if self.token_path is None:
+            return None
+        try:
+            from google.auth.transport.requests import Request
+            from google.oauth2.credentials import Credentials
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            from googleapiclient.discovery import build
+
+            creds = None
+            if self.token_path.exists():
+                creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
+
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
                 else:
-                    print(f"  [Gmail] Resume folder not found: {fp}")
+                    flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
+                    creds = flow.run_local_server(port=0)
+                self.token_path.write_text(creds.to_json())
 
-            if default:
-                dp = Path(default).expanduser()
-                _DEFAULT_RESUME = dp if dp.exists() else None
-                if not _DEFAULT_RESUME:
-                    print(f"  [Gmail] Default resume not found: {dp}")
+            svc = build("gmail", "v1", credentials=creds)
 
+            if self.sender_email:
+                try:
+                    prof   = svc.users().getProfile(userId="me").execute()
+                    actual = prof.get("emailAddress", "").lower()
+                    if actual and actual != self.sender_email:
+                        print(f"\n  [Gmail] ERROR: token is for '{actual}', expected '{self.sender_email}'")
+                        print(f"  [Gmail] Fix: delete {self.token_path} and re-run --login\n")
+                        return None
+                    print(f"  [Gmail] Authenticated as: {actual}")
+                except Exception:
+                    pass
+
+            self._service = svc
+            return self._service
         except Exception as e:
-            print(f"  [Gmail] resumes.json error: {e}")
+            print(f"  [Gmail] auth error: {e}")
+            return None
 
-    if not SENT_CSV.exists():
-        with open(SENT_CSV, "w", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=SENT_CSV_HEADERS).writeheader()
-        return
+    # ── Resume picker ─────────────────────────────────────────────────────────
 
-    try:
-        with open(SENT_CSV, "r", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                email = row.get("to_email", "").strip().lower()
-                if email:
-                    SENT_EMAILS.add(email)
-    except Exception:
-        pass
+    def pick_resume(self, job_title: str) -> Path | None:
+        if not self._all_resumes:
+            return self._default_resume
+        title_words = [
+            w for w in re.sub(r"[^a-z0-9 ]", " ", job_title.lower()).split()
+            if len(w) >= 2 and w not in _STOPWORDS
+        ]
+        if not title_words:
+            return self._default_resume
+        best_score, best_path = 0, None
+        for pdf in self._all_resumes:
+            path_text = pdf.as_posix().lower()
+            score = sum(1 for w in title_words if w in path_text)
+            if score > best_score:
+                best_score, best_path = score, pdf
+        return best_path if best_score > 0 else self._default_resume
 
-    if SENT_EMAILS:
-        print(f"  Gmail tracker: {len(SENT_EMAILS)} recruiter(s) already contacted.\n")
+    # ── Internal helpers ──────────────────────────────────────────────────────
 
+    def _log_sent(self, to_email: str, job_title: str, company: str,
+                  job_url: str, resume_label: str = ""):
+        self.sent_emails.add(to_email.lower())
+        if self.sent_csv:
+            with open(self.sent_csv, "a", newline="", encoding="utf-8") as f:
+                csv.DictWriter(f, fieldnames=SENT_CSV_HEADERS).writerow({
+                    "timestamp":   datetime.now().isoformat(timespec="seconds"),
+                    "to_email":    to_email,
+                    "job_title":   job_title,
+                    "company":     company,
+                    "job_url":     job_url,
+                    "resume_used": resume_label,
+                })
 
-def pick_resume(job_title: str) -> Path | None:
-    """
-    Scan all PDFs in the profile's resume folder and return the best match
-    for the given job title. Scores each PDF by counting how many meaningful
-    words from the job title appear in its path (folder names + filename).
-    Falls back to default_resume if nothing scores above 0.
-    """
-    if not _ALL_RESUMES:
-        return _DEFAULT_RESUME
+    @staticmethod
+    def _attach_resume(msg: MIMEMultipart, resume: Path):
+        try:
+            subtype = "pdf" if resume.suffix.lower() == ".pdf" \
+                else "vnd.openxmlformats-officedocument.wordprocessingml.document"
+            with open(resume, "rb") as f:
+                part = MIMEApplication(f.read(), _subtype=subtype)
+                part.add_header("Content-Disposition", "attachment", filename=resume.name)
+                msg.attach(part)
+        except Exception as e:
+            print(f"      → [Gmail] resume attach error: {e}")
 
-    # Tokenise job title — skip stopwords and short words
-    title_words = [
-        w for w in re.sub(r"[^a-z0-9 ]", " ", job_title.lower()).split()
-        if len(w) >= 2 and w not in _STOPWORDS
-    ]
-    if not title_words:
-        return _DEFAULT_RESUME
+    def _compose_dice(self, to: str, job_title: str, company: str,
+                      job_url: str, resume: Path | None) -> MIMEMultipart:
+        company_label = f" at {company.strip()}" if company.strip() else ""
+        has_resume    = bool(resume and resume.exists())
+        name          = self.sender_name
 
-    best_score, best_path = 0, None
-    for pdf in _ALL_RESUMES:
-        # Score against the full relative path (subfolder names + filename)
-        path_text = pdf.as_posix().lower()
-        score = sum(1 for w in title_words if w in path_text)
-        if score > best_score:
-            best_score, best_path = score, pdf
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = f"Application for {job_title}{company_label}"
+        msg["From"]    = self.sender_email
+        msg["To"]      = to
 
-    if best_score > 0:
-        return best_path
-    return _DEFAULT_RESUME
-
-
-def _log_sent(to_email: str, job_title: str, company: str, job_url: str,
-              resume_label: str = ""):
-    SENT_EMAILS.add(to_email.lower())
-    if SENT_CSV:
-        with open(SENT_CSV, "a", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=SENT_CSV_HEADERS).writerow({
-                "timestamp":   datetime.now().isoformat(timespec="seconds"),
-                "to_email":    to_email,
-                "job_title":   job_title,
-                "company":     company,
-                "job_url":     job_url,
-                "resume_used": resume_label,
-            })
-
-
-# ── Email extraction ─────────────────────────────────────────────────────────
-
-_SKIP = ["noreply", "no-reply", "donotreply", "support@", "info@", "hello@",
-         "contact@", "careers@dice", "dice.com", "example.com", "sentry.io"]
-
-def extract_recruiter_emails(text: str) -> list[str]:
-    """Return unique recruiter email addresses found in text."""
-    found = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", text)
-    seen, result = set(), []
-    for email in found:
-        el = email.lower()
-        if any(p in el for p in _SKIP):
-            continue
-        if el not in seen:
-            seen.add(el)
-            result.append(email)
-    return result
-
-
-# ── Email composition ────────────────────────────────────────────────────────
-
-def _compose(to: str, sender: str, job_title: str, company: str,
-             job_url: str, resume: Path | None = None) -> MIMEMultipart:
-    company_str   = company.strip() if company.strip() else "your company"
-    company_label = f" at {company.strip()}" if company.strip() else ""
-    name          = SENDER_NAME
-
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"Application for {job_title}{company_label}"
-    msg["From"]    = sender
-    msg["To"]      = to
-
-    # Text + HTML as an alternative sub-part
-    alt = MIMEMultipart("alternative")
-
-    has_resume = bool(resume and resume.exists())
-
-    plain = f"""\
+        plain = f"""\
 Hi,
 
 I came across the {job_title} opening{company_label} on Dice.com and wanted to reach out directly.
@@ -245,8 +231,7 @@ Looking forward to hearing from you.
 Best regards,
 {name}
 """
-
-    html = f"""\
+        html = f"""\
 <html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;">
 <p>Hi,</p>
 <p>I came across the <strong>{job_title}</strong> opening{company_label} on Dice.com \
@@ -262,80 +247,158 @@ to discuss the role or my background further.</p>
 <p>Best regards,<br><strong>{name}</strong></p>
 </body></html>"""
 
-    alt.attach(MIMEText(plain, "plain"))
-    alt.attach(MIMEText(html,  "html"))
-    msg.attach(alt)
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(plain, "plain"))
+        alt.attach(MIMEText(html, "html"))
+        msg.attach(alt)
+        if resume and resume.exists():
+            self._attach_resume(msg, resume)
+        return msg
 
-    # Attach resume (PDF or DOCX)
-    if resume and resume.exists():
+    @staticmethod
+    def _compose_cold_msg(to: str, sender_email: str, subject: str,
+                          body: str, resume: Path | None) -> MIMEMultipart:
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"]    = sender_email
+        msg["To"]      = to
+        html_body = body.replace("\n\n", "</p><p>").replace("\n", "<br>")
+        html = (
+            '<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;">'
+            f"<p>{html_body}</p></body></html>"
+        )
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(body, "plain"))
+        alt.attach(MIMEText(html, "html"))
+        msg.attach(alt)
+        if resume and resume.exists():
+            GmailSender._attach_resume(msg, resume)
+        return msg
+
+    # ── Public send API ───────────────────────────────────────────────────────
+
+    def send_recruiter_email(self, to: str, job_title: str, company: str,
+                             job_url: str) -> bool:
+        """Dice outreach email with best-matching resume."""
+        if to.lower() in self.sent_emails:
+            return False
         try:
-            subtype = "pdf" if resume.suffix.lower() == ".pdf" \
-                else "vnd.openxmlformats-officedocument.wordprocessingml.document"
-            with open(resume, "rb") as f:
-                part = MIMEApplication(f.read(), _subtype=subtype)
-                part.add_header("Content-Disposition", "attachment", filename=resume.name)
-                msg.attach(part)
+            svc = self.get_service()
+            if not svc:
+                return False
+            resume = self.pick_resume(job_title)
+            msg    = self._compose_dice(to, job_title, company, job_url, resume)
+            raw    = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+            svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+            label  = resume.name if resume else "none"
+            self._log_sent(to, job_title, company, job_url, label)
+            if resume:
+                print(f"      → [Gmail] Resume attached: {resume.name}")
+            return True
         except Exception as e:
-            print(f"      → [Gmail] resume attach error: {e}")
+            print(f"      → [Gmail] send error: {e}")
+            return False
 
-    return msg
+    def send_cold_email(self, to: str, subject: str, body: str,
+                        resume: Path | None, source: str = "linkedin") -> bool:
+        """LinkedIn / cold outreach email."""
+        if to.lower() in self.sent_emails:
+            return False
+        try:
+            svc = self.get_service()
+            if not svc:
+                return False
+            msg = self._compose_cold_msg(to, self.sender_email, subject, body, resume)
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+            svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+            self._log_sent(to, subject, source, "", resume.name if resume else "none")
+            return True
+        except Exception as e:
+            print(f"      → [Gmail] cold email error: {e}")
+            return False
+
+    def check_inbox_replies(self) -> list[dict]:
+        replies = []
+        if not self.sent_emails:
+            return replies
+        try:
+            svc = self.get_service()
+            if not svc:
+                return replies
+            from_parts = " OR ".join(f"from:{e}" for e in list(self.sent_emails)[:20])
+            result = svc.users().messages().list(
+                userId="me", q=f"({from_parts}) in:inbox", maxResults=20
+            ).execute()
+            for ref in result.get("messages", []):
+                m = svc.users().messages().get(
+                    userId="me", id=ref["id"], format="metadata",
+                    metadataHeaders=["Subject", "From", "Date"],
+                ).execute()
+                headers = {h["name"]: h["value"] for h in m["payload"]["headers"]}
+                replies.append({
+                    "from":    headers.get("From", ""),
+                    "subject": headers.get("Subject", ""),
+                    "date":    headers.get("Date", ""),
+                    "snippet": m.get("snippet", ""),
+                })
+        except Exception as e:
+            print(f"  [Gmail] inbox check error: {e}")
+        return replies
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# ── Module-level helpers (email extraction — stateless) ───────────────────────
+
+def extract_recruiter_emails(text: str) -> list[str]:
+    found = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", text)
+    seen, result = set(), []
+    for email in found:
+        el = email.lower()
+        if any(p in el for p in _SKIP_ADDRS):
+            continue
+        if el not in seen:
+            seen.add(el)
+            result.append(email)
+    return result
+
+
+# ── Backward-compat module-level API (used by main.py) ───────────────────────
+# main.py is sequential / single-profile so a shared default instance is fine.
+
+_default = GmailSender()
+
+# Expose the sent_emails set at module level so main.py can read it directly
+@property
+def _sent_emails_prop(self):
+    return _default.sent_emails
+
+SENT_EMAILS: set[str] = _default.sent_emails   # live reference — same object
+
+
+def init_gmail(profile_dir: Path, sender_name: str = "Applicant",
+               sender_email: str = "", resume_path: str = ""):
+    global SENT_EMAILS
+    _default.init(profile_dir, sender_name, sender_email, resume_path)
+    SENT_EMAILS = _default.sent_emails          # re-point after init resets the set
+
+
+def get_gmail_service():
+    return _default.get_service()
+
+
+def pick_resume(job_title: str) -> Path | None:
+    return _default.pick_resume(job_title)
+
 
 def send_recruiter_email(to: str, job_title: str, company: str,
                          job_url: str, sender_email: str) -> bool:
-    """Send an outreach email with the best-matching resume attached."""
-    if to.lower() in SENT_EMAILS:
-        return False
-    try:
-        service = get_gmail_service()
-        if not service:
-            return False
-        resume = pick_resume(job_title)
-        msg = _compose(to, sender_email, job_title, company, job_url, resume)
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        service.users().messages().send(userId="me", body={"raw": raw}).execute()
-        resume_label = resume.name if resume else "none"
-        _log_sent(to, job_title, company, job_url, resume_label)
-        if resume:
-            print(f"      → [Gmail] Resume attached: {resume.name}")
-        return True
-    except Exception as e:
-        print(f"      → [Gmail] send error: {e}")
-        return False
+    return _default.send_recruiter_email(to, job_title, company, job_url)
+
+
+def send_cold_email(to: str, subject: str, body: str,
+                    resume: "Path | None", sender_email: str,
+                    source: str = "linkedin") -> bool:
+    return _default.send_cold_email(to, subject, body, resume, source)
 
 
 def check_inbox_replies() -> list[dict]:
-    """
-    Scan inbox for replies from any recruiter we previously emailed.
-    Returns a list of dicts with keys: from, subject, date, snippet.
-    """
-    replies = []
-    if not SENT_EMAILS:
-        return replies
-    try:
-        service = get_gmail_service()
-        if not service:
-            return replies
-        # Build a query: from:email1 OR from:email2 ...
-        from_parts = " OR ".join(f"from:{e}" for e in list(SENT_EMAILS)[:20])
-        query = f"({from_parts}) in:inbox"
-        result = service.users().messages().list(
-            userId="me", q=query, maxResults=20
-        ).execute()
-        for ref in result.get("messages", []):
-            msg = service.users().messages().get(
-                userId="me", id=ref["id"], format="metadata",
-                metadataHeaders=["Subject", "From", "Date"],
-            ).execute()
-            headers = {h["name"]: h["value"] for h in msg["payload"]["headers"]}
-            replies.append({
-                "from":    headers.get("From", ""),
-                "subject": headers.get("Subject", ""),
-                "date":    headers.get("Date", ""),
-                "snippet": msg.get("snippet", ""),
-            })
-    except Exception as e:
-        print(f"  [Gmail] inbox check error: {e}")
-    return replies
+    return _default.check_inbox_replies()

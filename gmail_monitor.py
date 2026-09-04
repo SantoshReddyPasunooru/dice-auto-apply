@@ -416,6 +416,13 @@ def _classify_sync(from_raw: str, subject: str, body: str) -> dict:
                 "is_rtr": False, "is_offer": False}
 
 
+# Regex that matches placeholder names Ollama sometimes emits literally
+_PLACEHOLDER_RE = re.compile(
+    r"\[(?:Recruiter\s*)?(?:Name|Hiring\s*Manager|recruiter\s*name|Your\s*Name|First\s*Name)\]",
+    re.IGNORECASE,
+)
+
+
 # ── Ollama — reply generator ──────────────────────────────────────────────────
 
 def _generate_reply_sync(recruiter_body: str, subject: str,
@@ -473,6 +480,11 @@ def _generate_reply_sync(recruiter_body: str, subject: str,
                            messages=[{"role": "user", "content": prompt}])
         body = resp.message.content.strip()
         body = re.sub(r"(?i)^subject\s*:.*\n?", "", body).strip()
+        # Replace any [Recruiter Name] / [Name] / [Hiring Manager] placeholders
+        if recruiter_first_name:
+            body = _PLACEHOLDER_RE.sub(recruiter_first_name, body)
+        else:
+            body = _PLACEHOLDER_RE.sub("", body).strip()
         # Ensure the greeting is correct even if model ignored the instruction
         if not body.startswith("Hi"):
             body = f"{greeting}\n\n{body}"
@@ -513,6 +525,7 @@ async def _monitor_profile(email: str, profile_data: dict,
     stats.uptime_start = datetime.now().strftime("%H:%M:%S")
 
     processed_ids: set[str] = set()
+    _replied_at:   dict[str, datetime] = {}   # {from_email: last_reply_time}
 
     while True:
         try:
@@ -594,6 +607,15 @@ async def _monitor_profile(email: str, profile_data: dict,
                              f"Received [{category}] {tab_label}",
                              f"{from_email} → {sender_short} | {subject[:35]}")
 
+                        # 1-hour cooldown: skip if we already replied to this sender recently
+                        if from_email in _replied_at:
+                            elapsed = (datetime.now() - _replied_at[from_email]).total_seconds()
+                            if elapsed < 3600:
+                                mins = int(elapsed // 60)
+                                _log(tag, "⏳", "Cooldown — skipping duplicate",
+                                     f"{from_email} replied {mins}m ago")
+                                continue
+
                         recruiter_first = _extract_first_name(from_raw)
                         reply_body = await asyncio.to_thread(
                             _generate_reply_sync, body, subject, profile_data, clf,
@@ -611,6 +633,7 @@ async def _monitor_profile(email: str, profile_data: dict,
 
                         if ok:
                             await asyncio.to_thread(_mark_read, svc, msg_id)
+                            _replied_at[from_email] = datetime.now()
                             stats.replies_sent += 1
 
                             if category == "INTERVIEW" or clf.get("is_interview"):

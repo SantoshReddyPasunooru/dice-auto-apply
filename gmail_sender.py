@@ -20,6 +20,7 @@ from pathlib import Path
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",   # needed for archive/labels/mark-read
 ]
 
 CREDS_PATH   = Path(__file__).parent / "gmail_credentials.json"
@@ -109,50 +110,60 @@ class GmailSender:
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
-    def get_service(self):
+    def get_service(self, max_retries: int = 3):
         if self._service:
             return self._service
         if not CREDS_PATH.exists():
             return None
         if self.token_path is None:
             return None
-        try:
-            from google.auth.transport.requests import Request
-            from google.oauth2.credentials import Credentials
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            from googleapiclient.discovery import build
 
-            creds = None
-            if self.token_path.exists():
-                creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from googleapiclient.discovery import build
 
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
-                    creds = flow.run_local_server(port=0)
-                self.token_path.write_text(creds.to_json())
+        for attempt in range(1, max_retries + 1):
+            try:
+                creds = None
+                if self.token_path.exists():
+                    creds = Credentials.from_authorized_user_file(str(self.token_path), SCOPES)
 
-            svc = build("gmail", "v1", credentials=creds)
+                if not creds or not creds.valid:
+                    if creds and creds.expired and creds.refresh_token:
+                        creds.refresh(Request())
+                    else:
+                        # Print clearly which account to choose in the browser
+                        print(f"\n  ┌─ Gmail OAuth for: {self.sender_email}")
+                        print(f"  │  IMPORTANT: sign in as  >>>  {self.sender_email}  <<<")
+                        print(f"  └─ Opening browser now...\n")
+                        flow  = InstalledAppFlow.from_client_secrets_file(str(CREDS_PATH), SCOPES)
+                        creds = flow.run_local_server(port=0)
+                    self.token_path.write_text(creds.to_json())
 
-            if self.sender_email:
-                try:
+                svc = build("gmail", "v1", credentials=creds)
+
+                if self.sender_email:
                     prof   = svc.users().getProfile(userId="me").execute()
                     actual = prof.get("emailAddress", "").lower()
                     if actual and actual != self.sender_email:
-                        print(f"\n  [Gmail] ERROR: token is for '{actual}', expected '{self.sender_email}'")
-                        print(f"  [Gmail] Fix: delete {self.token_path} and re-run --login\n")
-                        return None
-                    print(f"  [Gmail] Authenticated as: {actual}")
-                except Exception:
-                    pass
+                        print(f"\n  [Gmail] Wrong account: signed in as '{actual}', need '{self.sender_email}'")
+                        # Delete the bad token so the next attempt re-opens OAuth
+                        self.token_path.unlink(missing_ok=True)
+                        if attempt < max_retries:
+                            print(f"  [Gmail] Retrying... ({attempt}/{max_retries})\n")
+                        continue
+                    print(f"  [Gmail] ✓ Authenticated as: {actual}")
 
-            self._service = svc
-            return self._service
-        except Exception as e:
-            print(f"  [Gmail] auth error: {e}")
-            return None
+                self._service = svc
+                return self._service
+
+            except Exception as e:
+                print(f"  [Gmail] auth error (attempt {attempt}): {e}")
+                if attempt >= max_retries:
+                    return None
+
+        return None
 
     # ── Resume picker ─────────────────────────────────────────────────────────
 

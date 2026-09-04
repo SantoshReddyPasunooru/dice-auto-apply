@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page, BrowserContext
 
 import gmail_sender
+from recruiter_db import recruiter_db
 
 load_dotenv()
 
@@ -50,6 +51,30 @@ _DATE_OPTIONS     = {
     "1": ("past-week",  "Past week"),
     "2": ("past-month", "Past month"),
     "3": ("",           "Any time"),
+}
+_EXPERIENCE_OPTIONS = {
+    "1": ("junior",  "Junior / Entry Level  (0-2 yrs)"),
+    "2": ("mid",     "Mid Level             (2-5 yrs)"),
+    "3": ("senior",  "Senior                (5+ yrs)"),
+    "4": ("lead",    "Lead / Principal / Staff"),
+    "5": ("any",     "Any experience level  (no filter)"),
+}
+# Keywords used to (a) add to the LinkedIn search query and (b) filter post text
+_EXPERIENCE_SEARCH_TERMS: dict[str, list[str]] = {
+    "junior":  ["junior", "entry level", "entry-level", "new grad"],
+    "mid":     ["mid level", "mid-level", "associate"],
+    "senior":  ["senior", "sr."],
+    "lead":    ["lead", "principal", "staff engineer"],
+}
+_EXPERIENCE_POST_KEYWORDS: dict[str, list[str]] = {
+    "junior":  ["junior", "entry level", "entry-level", "new grad",
+                "0-2 year", "1-2 year", "1-3 year", "fresher"],
+    "mid":     ["mid level", "mid-level", "associate", "2-4 year",
+                "2-5 year", "3-5 year", "3+ year"],
+    "senior":  ["senior", "sr.", " sr ", "5+ year", "6+ year",
+                "7+ year", "5-8 year", "5 year", "experienced"],
+    "lead":    ["lead", "principal", "staff engineer", "tech lead",
+                "architect", "10+ year", "8+ year"],
 }
 
 
@@ -128,6 +153,25 @@ def prompt_li_config(preset_email: str | None = None) -> dict:
     date_choice = _ask("Select date filter (number)", default_date_key)
     date_filter = _DATE_OPTIONS.get(date_choice, _DATE_OPTIONS["1"])[0]
 
+    # ── Experience level filter ───────────────────────────────────────────────
+    print("\n  Experience level filter:")
+    for k, (_, label) in _EXPERIENCE_OPTIONS.items():
+        print(f"    {k}. {label}")
+    print("  Enter one or more numbers separated by spaces  (e.g. '2 3' = Mid + Senior)")
+    existing_levels = existing.get("experience_levels", ["any"])
+    default_exp_keys = " ".join(
+        k for k, (v, _) in _EXPERIENCE_OPTIONS.items() if v in existing_levels
+    ) or "5"
+    exp_raw    = _ask("Experience levels", default_exp_keys)
+    exp_chosen = [_EXPERIENCE_OPTIONS[k.strip()][0]
+                  for k in exp_raw.split() if k.strip() in _EXPERIENCE_OPTIONS]
+    # "any" overrides everything else; default to ["any"] if nothing valid chosen
+    if not exp_chosen or "any" in exp_chosen:
+        experience_levels = ["any"]
+    else:
+        experience_levels = exp_chosen
+    print(f"  → Selected: {', '.join(experience_levels)}")
+
     # ── Volume limits ─────────────────────────────────────────────────────────
     max_posts  = int(_ask("Max posts to scan per run",    str(existing.get("max_posts", 60))))
     max_emails = int(_ask("Max emails to send per run",   str(existing.get("max_emails", 25))))
@@ -140,6 +184,7 @@ def prompt_li_config(preset_email: str | None = None) -> dict:
         "job_types":       job_types,
         "target_roles":    target_roles,
         "date_filter":     date_filter,
+        "experience_levels": experience_levels,
         "max_posts":       max_posts,
         "max_emails":      max_emails,
         "delay_min":       delay_min,
@@ -258,14 +303,30 @@ async def launch_li_session(pw, session_dir: Path) -> tuple[BrowserContext, Page
 
 # ── LinkedIn search navigation ────────────────────────────────────────────────
 
-def _build_li_search_url(keywords: list[str], job_types: list[str], date_filter: str) -> str:
+def _build_li_search_url(keywords: list[str], job_types: list[str],
+                         date_filter: str,
+                         experience_levels: list[str] | None = None) -> str:
     from urllib.parse import quote_plus
 
-    # Merge job types + keywords into one query — no duplication, no complex OR
-    all_terms = list(dict.fromkeys(job_types + keywords))   # deduplicate, preserve order
-    query     = " ".join(all_terms)
+    # Merge job types + keywords — deduplicate, preserve order
+    all_terms = list(dict.fromkeys(job_types + keywords))
 
-    url = f"https://www.linkedin.com/search/results/content/?keywords={quote_plus(query)}&sortBy=date_posted"
+    # Append the first search term for each chosen experience level
+    # (just one term per level keeps the query readable; post-filter does the heavy lifting)
+    if experience_levels and "any" not in experience_levels:
+        for level in experience_levels:
+            terms = _EXPERIENCE_SEARCH_TERMS.get(level, [])
+            if terms:
+                # Add only the first/most distinctive term if not already in query
+                term = terms[0]
+                if not any(term.lower() in t.lower() for t in all_terms):
+                    all_terms.append(term)
+
+    query = " ".join(all_terms)
+    url   = (
+        "https://www.linkedin.com/search/results/content/"
+        f"?keywords={quote_plus(query)}&sortBy=date_posted"
+    )
     if date_filter:
         url += f"&datePosted={quote_plus(date_filter)}"
     return url
@@ -276,6 +337,7 @@ async def navigate_to_search(page: Page, config: dict):
         config["search_keywords"],
         config["job_types"],
         config.get("date_filter", "past-week"),
+        config.get("experience_levels", ["any"]),
     )
     print(f"  → Searching: {url}\n")
     await page.goto(url, wait_until="domcontentloaded")
@@ -511,6 +573,51 @@ async def scroll_for_more(page: Page) -> bool:
 
 # ── Post analysis ─────────────────────────────────────────────────────────────
 
+_GENERIC_NAMES = {
+    "hiring", "manager", "team", "hr", "recruiter", "talent", "acquisition",
+    "staffing", "noreply", "no-reply", "hello", "info", "jobs", "careers",
+    "support", "admin", "contact", "dear", "there",
+}
+
+
+def _extract_first_name(raw: str) -> str:
+    """
+    Extract and return the recruiter's first name from a full name string,
+    a 'Full Name <email>' header, or a LinkedIn author field.
+    Returns "" if no clean first name can be found.
+    """
+    # Strip email address part
+    name = re.sub(r"<[^>]+>", "", raw).strip().strip('"').strip("'")
+    # Take only the first token
+    first = name.split()[0] if name else ""
+    # Discard generic / role-based words and non-alpha strings
+    if not first or first.lower() in _GENERIC_NAMES or not re.match(r"^[A-Za-z\-']{2,}$", first):
+        return ""
+    return first.capitalize()
+
+
+def _extract_name_from_post(text: str) -> str:
+    """
+    Try to pull the recruiter's first name from common LinkedIn post patterns.
+    e.g. "Hi, I'm Sarah from Acme…" or "— John | Recruiter at…"
+    """
+    patterns = [
+        r"(?:I'm|I am|this is|hi[,!]?\s+i'm)\s+([A-Z][a-z]{1,20})",
+        r"^([A-Z][a-z]{1,20})\s+\|",
+        r"\|\s*([A-Z][a-z]{1,20})\s*\|",
+        r"—\s*([A-Z][a-z]{1,20})\b",
+        r"regards[,\s]+([A-Z][a-z]{1,20})\b",
+        r"thanks[,\s]+([A-Z][a-z]{1,20})\b",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            name = m.group(1).capitalize()
+            if name.lower() not in _GENERIC_NAMES:
+                return name
+    return ""
+
+
 _JOB_KEYWORDS = [
     "hiring", "we're hiring", "we are hiring", "looking for", "now hiring",
     "open role", "open position", "job opportunity", "job opening",
@@ -536,6 +643,31 @@ def is_job_post(text: str) -> bool:
     if any(kw in lower for kw in _SKIP_KEYWORDS):
         return False
     return any(kw in lower for kw in _JOB_KEYWORDS)
+
+
+def is_experience_match(text: str, experience_levels: list[str]) -> bool:
+    """
+    Returns True if the post text matches at least one of the configured
+    experience levels, or if the filter is set to 'any' / not configured.
+    Posts with NO experience mention at all are always allowed through.
+    """
+    if not experience_levels or "any" in experience_levels:
+        return True
+
+    lower = text.lower()
+
+    # Collect every known experience keyword across ALL levels
+    all_exp_kws = [kw for kws in _EXPERIENCE_POST_KEYWORDS.values() for kw in kws]
+
+    # If the post doesn't mention any experience level at all, let it through
+    if not any(kw in lower for kw in all_exp_kws):
+        return True
+
+    # Post DOES mention experience — check if it matches a requested level
+    return any(
+        any(kw in lower for kw in _EXPERIENCE_POST_KEYWORDS.get(level, []))
+        for level in experience_levels
+    )
 
 
 def extract_email(text: str) -> str | None:
@@ -654,26 +786,37 @@ def _compose_cold_email_sync(
     """
     Use Ollama to write a cold outreach email.
     Returns (subject, body).
+    recruiter_name should be the raw author string from LinkedIn; we resolve
+    the first name here so the greeting is always personal, never generic.
     """
-    title   = job_details.get("title", "the role")
-    company = job_details.get("company", "") or "your company"
-    name    = profile.get("name", "Applicant")
+    title     = job_details.get("title", "the role")
+    company   = job_details.get("company", "") or "your company"
+    name      = profile.get("name", "Applicant")
     work_auth = profile.get("work_auth", "OPT")
-    years   = profile.get("years_experience", 3)
-    skills  = profile.get("skills", "")[:120]
-    location = profile.get("location", "")
+    years     = profile.get("years_experience", 3)
+    skills    = profile.get("skills", "")[:120]
+    location  = profile.get("location", "")
     available = profile.get("available_to_start", "immediately")
 
-    subject = (
-        f"Interested in {title} — {work_auth} candidate, {years} yrs exp"
-    )
+    # Resolve the recruiter's first name — try author field first, then post body
+    first_name = _extract_first_name(recruiter_name or "")
+    if not first_name:
+        first_name = _extract_name_from_post(post_snippet)
+    # greeting: "Hi Sarah," if found, otherwise just "Hi," — never "Hiring Manager"
+    greeting = f"Hi {first_name}," if first_name else "Hi,"
+
+    subject = f"Interested in {title} — {work_auth} candidate, {years} yrs exp"
 
     try:
         import ollama
+        recruiter_line = (
+            f"Recruiter first name: {first_name}" if first_name
+            else "Recruiter name: unknown — do NOT invent a name or use generic titles"
+        )
         prompt = (
             f"Write a short cold outreach email from a job seeker to a recruiter "
             f"who posted a job on LinkedIn.\n\n"
-            f"Recruiter: {recruiter_name or 'Hiring Manager'}\n"
+            f"{recruiter_line}\n"
             f"Role posted: {title} at {company}\n"
             f"Their post (snippet): {post_snippet[:250]}\n\n"
             f"Candidate:\n"
@@ -682,26 +825,29 @@ def _compose_cold_email_sync(
             f"  Experience: {years} years\n"
             f"  Skills: {skills}\n"
             f"  Location: {location}\n"
-            f"  Work auth: {work_auth} (requires visa sponsorship)\n"
+            f"  Work auth: {work_auth}\n"
             f"  Available: {available}\n\n"
             f"Rules:\n"
+            f"- Start with exactly: {greeting}\n"
             f"- 3-5 sentences max\n"
             f"- Reference their LinkedIn post naturally in the first sentence\n"
             f"- Mention work authorization and availability\n"
             f"- Professional, warm, confident tone\n"
-            f"- End with: Best regards, {name}\n"
+            f"- End with: Best regards,\\n{name}\n"
             f"- Do NOT add a subject line inside the body\n"
             f"- Do NOT use placeholders like [Your Name] or [Company]\n"
+            f"- Do NOT use generic names like 'Hiring Manager', 'Team', 'Recruiter'\n"
             f"- Write only the email body, nothing else\n"
         )
         resp = ollama.chat(model=OLLAMA_MODEL, messages=[{"role": "user", "content": prompt}])
         body = resp.message.content.strip()
-        # Strip any accidental subject line the model might add
         body = re.sub(r"(?i)^subject\s*:.*\n?", "", body).strip()
+        # Ensure greeting is correct even if model ignored the instruction
+        if not body.startswith("Hi"):
+            body = f"{greeting}\n\n{body}"
     except Exception:
-        # Fallback template
         body = (
-            f"Hi {recruiter_name or 'there'},\n\n"
+            f"{greeting}\n\n"
             f"I came across your LinkedIn post about the {title} opportunity at {company} "
             f"and wanted to reach out directly.\n\n"
             f"I have {years} years of experience in {skills[:80]}, "
@@ -762,10 +908,12 @@ async def run_outreach(config: dict, tag: str = ""):
         resume_path=resume_path,
     )
 
-    p(f"Sender  : {sender_name} <{sender_email}>")
-    p(f"Keywords: {' '.join(config['search_keywords'])}")
-    p(f"Types   : {' '.join(config['job_types'])}")
-    p(f"Limit   : {config['max_posts']} posts / {config['max_emails']} emails")
+    exp_display = ", ".join(config.get("experience_levels", ["any"]))
+    p(f"Sender    : {sender_name} <{sender_email}>")
+    p(f"Keywords  : {' '.join(config['search_keywords'])}")
+    p(f"Types     : {' '.join(config['job_types'])}")
+    p(f"Experience: {exp_display}")
+    p(f"Limit     : {config['max_posts']} posts / {config['max_emails']} emails")
 
     async with async_playwright() as pw:
         context, page = await launch_li_session(pw, session_dir)
@@ -806,12 +954,18 @@ async def run_outreach(config: dict, tag: str = ""):
                 if not is_job_post(text):
                     continue
 
+                if not is_experience_match(text, config.get("experience_levels", ["any"])):
+                    p(f"[skip] Experience level mismatch — post {posts_seen}")
+                    continue
+
                 email = extract_email(text)
                 if not email:
                     continue
 
                 if email in gs.sent_emails:
                     p(f"[skip] Already emailed {email}")
+                    # Still update last_seen in the DB for this recruiter
+                    recruiter_db.upsert(email=email, source="linkedin", status="contacted")
                     continue
 
                 details   = await extract_job_details(text)
@@ -840,6 +994,14 @@ async def run_outreach(config: dict, tag: str = ""):
                 if sent:
                     emails_sent += 1
                     p(f"✓ Email sent → {email}  (resume: {resume.name if resume else 'none'})")
+                    recruiter_db.upsert(
+                        email=email,
+                        name=recruiter,
+                        company=details.get("company", ""),
+                        title=details.get("title", ""),
+                        source="linkedin",
+                        status="contacted",
+                    )
                 else:
                     p(f"✗ Failed to send → {email}")
 
@@ -1070,9 +1232,10 @@ if __name__ == "__main__":
                 gm_ok = "✓" if (sd / "gmail_token.json").exists() else "✗"
                 kw_ok = email in all_cfg
                 cfg   = all_cfg.get(email, {})
-                kw    = " ".join(cfg.get("search_keywords", [])) if kw_ok else "not configured"
+                kw  = " ".join(cfg.get("search_keywords", [])) if kw_ok else "not configured"
+                exp = ", ".join(cfg.get("experience_levels", ["any"])) if kw_ok else "—"
                 print(f"  {email}")
-                print(f"    LinkedIn: {li_ok}  Gmail: {gm_ok}  Keywords: {kw}")
+                print(f"    LinkedIn: {li_ok}  Gmail: {gm_ok}  Keywords: {kw}  Experience: {exp}")
 
     else:
         # python linkedin_outreach.py [--profile email]

@@ -2334,9 +2334,23 @@ async def _fill_workday(
                 print(f"          [Workday]   → after step: {pg[:100]}", flush=True)
             except Exception:
                 pass
-            # Verify page advanced — if still showing same step name with errors, warn
+            # Verify page advanced — if still showing same step name, check for hard errors
             current = await _detect_step()
             if current == step_name:
+                # Collect visible error button labels to surface the real problem
+                err_btns = await apply_page.locator("button[class*='error' i], button").all()
+                err_labels = []
+                for _eb in err_btns:
+                    try:
+                        _t = (await _eb.inner_text()).strip()
+                        if _t.startswith("Error-"):
+                            err_labels.append(_t[6:])
+                    except Exception:
+                        pass
+                if err_labels:
+                    err_str = ", ".join(err_labels[:5])
+                    print(f"          [Workday] ✗ '{step_name}' blocked by required field(s): {err_str}", flush=True)
+                    raise RuntimeError(f"Required field(s) missing on '{step_name}': {err_str}")
                 print(f"          [Workday] ⚠ page still shows '{step_name}' — may have errors", flush=True)
         except Exception as e:
             print(f"          [Workday] {step_name} step warning: {e}", flush=True)

@@ -276,8 +276,29 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
   <!-- LINKEDIN OUTREACH -->
   <div id="sec-linkedin_outreach" class="section">
     <div class="page-title">💼 LinkedIn Outreach <span id="badge-linkedin_outreach" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Search Settings</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:end">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Keywords</label>
+          <input id="li-keywords" type="text" placeholder="gen ai OPT W2" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Job Types</label>
+          <input id="li-job-types" type="text" placeholder="OPT W2 C2C" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Posted</label>
+          <select id="li-date" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+            <option value="past-24h">Past 24 hours</option>
+            <option value="past-week" selected>Past week</option>
+            <option value="past-month">Past month</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <div class="ctrl-row">
-      <button id="btn-linkedin_outreach" class="btn btn-primary" onclick="startFeature('linkedin_outreach')">▶ Start</button>
+      <button id="btn-linkedin_outreach" class="btn btn-primary" onclick="startLinkedIn()">▶ Start</button>
       <button id="stop-linkedin_outreach" class="btn btn-danger" onclick="stopFeature('linkedin_outreach')" style="display:none">■ Stop</button>
     </div>
     <div class="card-title" style="margin-bottom:8px">Live Log</div>
@@ -626,7 +647,7 @@ function switchTab(name) {
   if (name === 'profile') loadProfile();
   if (name === 'companies_apply') { loadCompanies(); loadCompanyJobs(); }
   if (name === 'dice_apply') loadJobs();
-  if (name === 'linkedin_outreach') loadRecruiters();
+  if (name === 'linkedin_outreach') { loadRecruiters(); loadLinkedInConfig(); }
   if (name === 'gmail_monitor') loadGmailContacts();
 }
 
@@ -768,6 +789,26 @@ function startFeature(feature, extra) {
 
 function stopFeature(feature) {
   fetch('/api/stop/' + feature, {method:'POST'}).then(() => loadStatus());
+}
+
+function startLinkedIn() {
+  const extra = {
+    keywords:  document.getElementById('li-keywords').value.trim() || undefined,
+    job_types: document.getElementById('li-job-types').value.trim() || undefined,
+    date:      document.getElementById('li-date').value || undefined,
+  };
+  startFeature('linkedin_outreach', extra);
+}
+
+function loadLinkedInConfig() {
+  fetch('/api/linkedin-config').then(r => r.json()).then(cfg => {
+    if (cfg.keywords)  document.getElementById('li-keywords').value  = cfg.keywords;
+    if (cfg.job_types) document.getElementById('li-job-types').value = cfg.job_types;
+    if (cfg.date) {
+      const sel = document.getElementById('li-date');
+      for (const opt of sel.options) { if (opt.value === cfg.date) { opt.selected = true; break; } }
+    }
+  });
 }
 
 function startDice() {

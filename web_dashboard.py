@@ -33,6 +33,7 @@ APPLIED_CSV     = _HERE / "applied_jobs.csv"
 EXT_CSV         = _HERE / "external_applied_jobs.csv"
 RECRUITERS_CSV  = _HERE / "recruiters.csv"
 COMPANIES_JSON  = _HERE / "applicable_companies.json"
+LI_CONFIG_JSON  = _HERE / "linkedin_config.json"
 
 app = Flask(__name__)
 
@@ -415,6 +416,12 @@ def api_run(feature):
         cmd = [sys.executable, "gmail_monitor.py", "--profile", PROFILE_EMAIL]
     elif feature == "linkedin_outreach":
         cmd = [sys.executable, "linkedin_outreach.py", "--profile", PROFILE_EMAIL]
+        if body.get("keywords"):
+            cmd += ["--keywords"] + body["keywords"].split()
+        if body.get("date"):
+            cmd += ["--date", body["date"]]
+        if body.get("job_types"):
+            cmd += ["--job-types"] + body["job_types"].split()
     elif feature == "dice_apply":
         cmd = [sys.executable, "main.py", "--profile", PROFILE_EMAIL]
         if body.get("query"):
@@ -459,6 +466,20 @@ def api_stop(feature):
     proc.terminate()
     _push_log(feature, "■ Process terminated by user")
     return jsonify({"ok": True})
+
+
+@app.route("/api/linkedin-config")
+def api_linkedin_config():
+    if not LI_CONFIG_JSON.exists():
+        return jsonify({})
+    all_cfg = json.loads(LI_CONFIG_JSON.read_text())
+    # Support both old flat format and new per-email keyed format
+    cfg = all_cfg.get(PROFILE_EMAIL, all_cfg if isinstance(all_cfg, dict) and "search_keywords" in all_cfg else {})
+    return jsonify({
+        "keywords":  " ".join(cfg.get("search_keywords", ["gen ai"])),
+        "job_types": " ".join(cfg.get("job_types", ["OPT", "W2"])),
+        "date":      cfg.get("date_filter", "past-week"),
+    })
 
 
 @app.route("/api/companies")

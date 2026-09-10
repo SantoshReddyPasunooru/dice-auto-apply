@@ -1226,6 +1226,27 @@ if __name__ == "__main__":
                 print(f"    LinkedIn: {li_ok}  Gmail: {gm_ok}  Keywords: {kw}  Experience: {exp}")
 
     else:
-        # python linkedin_outreach.py [--profile email]
+        # python linkedin_outreach.py [--profile email] [--keywords kw1 kw2] [--date past-week]
         config = load_li_config(profile_arg)
+        # CLI overrides (from dashboard)
+        if "--keywords" in sys.argv:
+            idx = sys.argv.index("--keywords")
+            kws = []
+            for a in sys.argv[idx + 1:]:
+                if a.startswith("--"): break
+                kws.append(a)
+            if kws:
+                config["search_keywords"] = kws
+        if "--date" in sys.argv:
+            idx = sys.argv.index("--date")
+            if idx + 1 < len(sys.argv):
+                config["date_filter"] = sys.argv[idx + 1]
+        if "--job-types" in sys.argv:
+            idx = sys.argv.index("--job-types")
+            jts = []
+            for a in sys.argv[idx + 1:]:
+                if a.startswith("--"): break
+                jts.append(a.upper())
+            if jts:
+                config["job_types"] = jts
         asyncio.run(run_outreach(config))

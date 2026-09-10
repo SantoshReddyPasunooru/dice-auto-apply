@@ -858,7 +858,7 @@ async def _handle_new_message(
                 or category == "INFO_REQUEST"
             )
             job_title = profile_data.get("current_title", "software engineer")
-            resume = gs.pick_resume(job_title) if wants_resume else None
+            resume = gs.pick_and_tailor_resume(job_title, body) if wants_resume else None
 
             await asyncio.sleep(random.uniform(REPLY_DELAY_MIN, REPLY_DELAY_MAX))
 

@@ -967,7 +967,8 @@ async def run_outreach(config: dict, tag: str = ""):
                     profile=profile_data,
                 )
 
-                resume = gs.pick_resume(details["title"])
+                jd_context = f"{details.get('title','')} {details.get('company','')} {text[:600]}"
+                resume = gs.pick_and_tailor_resume(details["title"], jd_context)
 
                 sent = gs.send_cold_email(
                     to=email,

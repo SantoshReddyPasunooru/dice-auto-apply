@@ -175,24 +175,47 @@ class GmailSender:
 
         return None
 
-    # ── Resume picker ─────────────────────────────────────────────────────────
+    # ── Resume picker + tailor ────────────────────────────────────────────────
 
-    def pick_resume(self, job_title: str) -> Path | None:
+    def _pick_best_master(self, job_title: str) -> Path | None:
+        """Pick the best-matching DOCX master (preferred) or any file."""
         if not self._all_resumes:
             return self._default_resume
         title_words = [
             w for w in re.sub(r"[^a-z0-9 ]", " ", job_title.lower()).split()
             if len(w) >= 2 and w not in _STOPWORDS
         ]
+        # Prefer DOCX files for tailoring; score by filename keyword match
+        docx_files = [p for p in self._all_resumes if p.suffix.lower() == ".docx"]
+        pool = docx_files if docx_files else self._all_resumes
         if not title_words:
-            return self._default_resume
+            return pool[0] if pool else self._default_resume
         best_score, best_path = 0, None
-        for pdf in self._all_resumes:
-            path_text = pdf.as_posix().lower()
+        for f in pool:
+            path_text = f.as_posix().lower()
             score = sum(1 for w in title_words if w in path_text)
             if score > best_score:
-                best_score, best_path = score, pdf
-        return best_path if best_score > 0 else self._default_resume
+                best_score, best_path = score, f
+        return best_path if best_score > 0 else (pool[0] if pool else self._default_resume)
+
+    def pick_resume(self, job_title: str) -> Path | None:
+        """Legacy: pick by filename only, no tailoring."""
+        return self._pick_best_master(job_title)
+
+    def pick_and_tailor_resume(self, job_title: str, jd_text: str = "") -> Path | None:
+        """
+        Pick the best-matching master DOCX and tailor it to the JD.
+        Falls back to plain pick_resume if tailoring fails or JD is empty.
+        """
+        master = self._pick_best_master(job_title)
+        if not master or not jd_text or master.suffix.lower() != ".docx":
+            return master
+        try:
+            from resume_tailor import tailor_resume
+            return tailor_resume(master, jd_text)
+        except Exception as e:
+            print(f"  [Tailor] Error — falling back to untailored resume: {e}")
+            return master
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

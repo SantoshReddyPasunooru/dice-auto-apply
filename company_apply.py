@@ -861,10 +861,13 @@ def _extract_resume_text(path: Path) -> str:
 _RESUME_TEXT_CACHE: dict[Path, str] = {}
 
 
-def get_resume(profile: dict, email: str, job_title: str = "") -> Optional[Path]:
+def get_resume(profile: dict, email: str, job_title: str = "",
+               jd_text: str = "", company: str = "") -> Optional[Path]:
     """
-    Pick the best resume for the given job title by scoring each file's
-    CONTENT (not just filename) against the job title keywords.
+    Pick the best-matching DOCX resume for the job and tailor it to the JD.
+    Scoring uses file content (2×) + filename (1×) against job title keywords.
+    If a DOCX is selected and jd_text is provided, the resume is tailored in-place
+    (cached copy) — the master file is never modified.
     Falls back to filename scoring, then default, then first file.
     """
     if not RESUMES_JSON.exists():
@@ -916,10 +919,18 @@ def get_resume(profile: dict, email: str, job_title: str = "") -> Optional[Path]
             if score > best_score:
                 best_score, best_path = score, p
 
-        if best_score > 0:
-            return best_path
+        best = best_path if best_score > 0 else (default_path or all_resumes[0])
 
-        return default_path or all_resumes[0]
+        # Tailor the DOCX to the JD if possible
+        if best and best.suffix.lower() == ".docx" and (jd_text or job_title):
+            try:
+                from resume_tailor import tailor_resume
+                context = jd_text or f"{job_title} {company}"
+                return tailor_resume(best, context)
+            except Exception as e:
+                print(f"  [Tailor] Error: {e} — using untailored resume")
+
+        return best
     except Exception:
         return None
 
@@ -7202,7 +7213,8 @@ async def apply_to_company(
         if dry_run:
             for i, job in enumerate(jobs, 1):
                 loc_str = job.get("location", "")
-                resume  = get_resume(profile, email, job["title"])
+                resume  = get_resume(profile, email, job["title"],
+                                    company=company_rec.get("name", ""))
                 print(f"  [{i}/{len(jobs)}] {job['title']}" + (f"  [{loc_str}]" if loc_str else ""))
                 print(f"          {job['url']}")
                 print(f"          Resume: {resume.name if resume else 'none — skipping upload'}")
@@ -7333,7 +7345,8 @@ async def apply_to_company(
             job_ats = job.get("ats", ats)
 
             loc_str = job.get("location", "")
-            resume  = get_resume(profile, email, title)
+            resume  = get_resume(profile, email, title,
+                                 company=company_rec.get("name", ""))
             _job_start = time.perf_counter()
             print(f"  [{i}/{len(jobs)}] {title}" + (f"  [{loc_str}]" if loc_str else ""))
             print(f"          {job_url}")

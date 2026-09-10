@@ -890,8 +890,9 @@ async def _handle_new_message(
             # in this thread. Human must take over beyond that point.
             auto_sent = thread_reply_counts.get(thread_id, 0)
             if auto_sent >= MAX_AUTO_REPLIES_PER_THREAD:
-                await asyncio.to_thread(_mark_read, svc, msg_id)
-                _log(tag, "🛑", f"Auto-reply limit ({MAX_AUTO_REPLIES_PER_THREAD}) reached — human needed",
+                await asyncio.to_thread(_mark_read,   svc, msg_id)
+                await asyncio.to_thread(_apply_label, svc, msg_id, "human_needed")
+                _log(tag, "🛑", f"Auto-reply limit ({MAX_AUTO_REPLIES_PER_THREAD}) reached — labeled human_needed",
                      f"{from_email} | {subject[:35]}")
                 return
 
@@ -989,7 +990,7 @@ def _save_processed_ids(email: str, ids: set[str]):
         pass
 
 
-MAX_AUTO_REPLIES_PER_THREAD = 2   # initial reply + one follow-up; human takes over after
+MAX_AUTO_REPLIES_PER_THREAD = 3   # stop auto-replying after 3 sends; human takes over
 
 
 def _thread_replies_path(email: str) -> Path:

@@ -1316,27 +1316,12 @@ async def _email_recruiter_if_found(page: Page, title: str, company: str, url: s
     try:
         text = await page.inner_text("body")
 
-        # If company name is missing, try to extract it from the page
-        resolved_company = company.strip()
-        if not resolved_company:
-            for sel in [
-                "[data-cy='company-name']", "[class*='companyName']",
-                "[class*='company-name']", "a[href*='/employer/']",
-            ]:
-                try:
-                    el_text = await page.locator(sel).first.inner_text(timeout=500)
-                    if el_text.strip():
-                        resolved_company = el_text.strip()
-                        break
-                except Exception:
-                    pass
-
         emails = gmail_sender.extract_recruiter_emails(text)
         for addr in emails:
             sent = gmail_sender.send_recruiter_email(
                 to=addr,
                 job_title=title,
-                company=resolved_company,
+                company=company,
                 job_url=url,
                 sender_email=DICE_EMAIL,
             )
@@ -1346,6 +1331,31 @@ async def _email_recruiter_if_found(page: Page, title: str, company: str, url: s
                 print(f"      → [Gmail] Already emailed {addr} — skipped")
     except Exception as e:
         print(f"      → [Gmail] email scan error: {e}")
+
+
+async def _resolve_company(page: Page, company: str) -> str:
+    """Extract company name from the Dice job detail page."""
+    if company.strip():
+        return company.strip()
+    # Primary: company name lives in the .logo wrapper on Dice job pages
+    for sel in [".logo p", ".logo a", "[class*='line-clamp'] "]:
+        try:
+            text = await page.locator(sel).first.inner_text(timeout=600)
+            if text.strip():
+                return text.strip()
+        except Exception:
+            pass
+    # Fallback: parse from page title "Job Title - Company - Location | Dice.com"
+    try:
+        title = await page.title()
+        parts = title.split(" - ")
+        if len(parts) >= 2:
+            candidate = parts[1].strip()
+            if candidate and " | " not in candidate:
+                return candidate
+    except Exception:
+        pass
+    return company
 
 
 async def apply_to_job(page: Page, title: str, company: str, location: str, url: str) -> str:
@@ -1689,6 +1699,9 @@ async def process_jobs(page: Page, cards: list[dict]):
             log_application(title, company, location, url, "error: navigation failed")
             stats["errors"] += 1
             continue
+
+        # Resolve company from the job detail page (search cards often miss it)
+        company = await _resolve_company(page, company)
 
         # ── Apply with one automatic retry on transient errors ────────────
         status = "error: unknown"

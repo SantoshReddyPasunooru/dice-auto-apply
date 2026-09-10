@@ -136,13 +136,16 @@ def _section_of(text: str) -> Optional[str]:
 
 def _is_job_title_para(para, prev_section: str) -> bool:
     """Heuristic: a Normal/bold paragraph in the experience section that
-    contains a separator (|, ,) and looks like 'Title, Company' or 'Title | Company'."""
+    contains a separator (|, ,) and looks like 'Title, Company' or 'Title | Company'.
+    List Paragraph style = bullet, not a title."""
     if prev_section != "experience":
         return False
     txt = para.text.strip()
     if not txt:
         return False
-    # Typically short, contains comma or pipe
+    style = para.style.name.lower()
+    if "list" in style:
+        return False  # bullet paragraph, never a job title
     return ("|" in txt or "," in txt) and len(txt) < 160
 
 
@@ -173,10 +176,12 @@ def parse_resume(doc: Document) -> dict:
         "section_head_idxs": {},
     }
 
-    # Para[1] is often the title line (short, contains | or is a role)
+    # Para[1] is often the title line — but only if it doesn't look like contact info
+    _contact_re = re.compile(r"@|\d{3}[-.\s]\d{3}|\(\d{3}\)|linkedin\.com|github\.com|http", re.I)
     if len(paras) > 1:
         p1 = paras[1].text.strip()
-        if p1 and len(p1) < 120 and ("|" in p1 or any(
+        is_contact = bool(_contact_re.search(p1))
+        if p1 and not is_contact and len(p1) < 120 and ("|" in p1 or any(
             k in p1.lower() for k in ["engineer", "analyst", "developer", "scientist",
                                        "architect", "manager", "specialist"]
         )):
@@ -212,7 +217,7 @@ def parse_resume(doc: Document) -> dict:
             is_bullet = "list" in style or txt.startswith("•") or txt.startswith("*")
             is_title  = _is_job_title_para(para, current_section)
 
-            if is_title or (not is_bullet and len(txt) < 160 and ("|" in txt or "," in txt)):
+            if is_title or (not is_bullet and "list" not in style and len(txt) < 160 and ("|" in txt or "," in txt)):
                 if current_exp_entry:
                     result["experience_entries"].append(current_exp_entry)
                 current_exp_entry = {"title_idx": idx, "bullet_idxs": []}

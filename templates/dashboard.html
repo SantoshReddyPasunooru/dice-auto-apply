@@ -402,14 +402,55 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
   <!-- COMPANIES APPLY -->
   <div id="sec-companies_apply" class="section">
     <div class="page-title">🏢 Companies Apply <span id="badge-companies_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
-    <div class="ctrl-row">
-      <div class="company-row">
-        <select id="company-select" style="min-width:200px">
-          <option value="">— Select Company —</option>
-        </select>
-        <button id="btn-companies_apply" class="btn btn-primary" onclick="startCompanies()">▶ Start</button>
-        <button id="stop-companies_apply" class="btn btn-danger" onclick="stopFeature('companies_apply')" style="display:none">■ Stop</button>
+
+    <!-- Search Settings -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Search Settings</div>
+
+      <!-- Company list -->
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Companies</label>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="toggleAllCompanies(true)">Select All</button>
+            <button class="btn btn-ghost btn-sm" onclick="toggleAllCompanies(false)">Clear</button>
+          </div>
+        </div>
+        <div id="company-checkbox-list" style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;background:var(--bg)">
+          <span style="color:var(--muted);font-size:12px">Loading…</span>
+        </div>
       </div>
+
+      <!-- Filters row -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px">
+        <div>
+          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Location</label>
+          <input id="ca-location" type="text" placeholder="remote, austin" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Date Posted</label>
+          <select id="ca-date" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+            <option value="">Any time</option>
+            <option value="1">Today (24h)</option>
+            <option value="7">Last 7 days</option>
+            <option value="14">Last 14 days</option>
+            <option value="30">Last 30 days</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Keywords</label>
+          <input id="ca-keywords" type="text" placeholder="python, ai, ml" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Experience</label>
+          <input id="ca-experience" type="text" placeholder="senior, staff" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+        </div>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <button id="btn-companies_apply" class="btn btn-primary" onclick="startCompanies()">▶ Start</button>
+      <button id="stop-companies_apply" class="btn btn-danger" onclick="stopFeature('companies_apply')" style="display:none">■ Stop</button>
     </div>
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">Stats</div>
@@ -820,10 +861,18 @@ function startDice() {
   startFeature('dice_apply', extra);
 }
 
+function toggleAllCompanies(check) {
+  document.querySelectorAll('#company-checkbox-list input[type=checkbox]').forEach(cb => cb.checked = check);
+}
+
 function startCompanies() {
-  const company = document.getElementById('company-select').value;
-  if (!company) { alert('Please select a company first'); return; }
-  startFeature('companies_apply', {company});
+  const companies = [...document.querySelectorAll('#company-checkbox-list input[type=checkbox]:checked')].map(cb => cb.value);
+  if (!companies.length) { alert('Please select at least one company'); return; }
+  const location   = document.getElementById('ca-location').value.trim()   || undefined;
+  const date       = document.getElementById('ca-date').value               || undefined;
+  const keywords   = document.getElementById('ca-keywords').value.trim()   || undefined;
+  const experience = document.getElementById('ca-experience').value.trim() || undefined;
+  startFeature('companies_apply', {companies, location, date, keywords, experience});
 }
 
 function connectGmail() {
@@ -937,9 +986,16 @@ function loadJobs() {
 
 function loadCompanies() {
   fetch('/api/companies').then(r => r.json()).then(list => {
-    const sel = document.getElementById('company-select');
-    sel.innerHTML = '<option value="">— Select Company —</option>' +
-      list.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+    const container = document.getElementById('company-checkbox-list');
+    if (!list.length) {
+      container.innerHTML = '<span style="color:var(--muted);font-size:12px">No companies configured</span>';
+      return;
+    }
+    container.innerHTML = list.map(c => `
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:3px 6px;border-radius:4px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(c)}">
+        <input type="checkbox" value="${escHtml(c)}" style="accent-color:var(--accent);cursor:pointer">
+        ${escHtml(c)}
+      </label>`).join('');
   });
 }
 

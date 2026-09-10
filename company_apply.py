@@ -5716,6 +5716,9 @@ async def _wd_questions(page: Page, profile: dict, email: str) -> None:
             except Exception:
                 pass
     except Exception as e:
+        _es = str(e)
+        if "Target crashed" in _es or "Target page, context or browser has been closed" in _es:
+            raise  # browser is dead — propagate to step runner
         print(f"          [Q] StratE error: {e}", flush=True)
 
     # ── STRATEGY F: Native <select> elements ─────────────────────────────────
@@ -6996,6 +6999,10 @@ async def _fill_workday(
             if current == step_name:
                 print(f"          [Workday] ⚠ page still shows '{step_name}' — may have errors", flush=True)
         except Exception as e:
+            _es = str(e)
+            if "Target crashed" in _es or "Target page, context or browser has been closed" in _es:
+                print(f"          [Workday] {step_name} fatal: browser crashed — skipping remaining steps", flush=True)
+                raise  # propagate to job loop; finally block will recover the page
             print(f"          [Workday] {step_name} step warning: {e}", flush=True)
 
     # Handle CC-305 "Voluntary Self-Identification of Disability" form that Workday
@@ -7162,14 +7169,8 @@ async def apply_to_company(
         print(f"  {len(jobs)} eligible this run (match filters + not yet applied).")
 
         if not jobs and experience:
-            print(f"\n  ↩  Experience filter [{', '.join(experience)}] matched 0 roles.")
-            print(f"     {company_rec['name']} likely does not use level labels in job titles.")
-            print(f"     Retrying without experience filter (keeping keywords/location/date)...")
-            jobs = _run_filter(keywords, locations, posted_days, [], work_type, us_only)
-            if jobs:
-                print(f"  ✓  {len(jobs)} roles found — experience filter dropped.\n")
-            else:
-                print(f"  Still 0 after dropping experience.")
+            print(f"\n  ✗  Experience filter [{', '.join(experience)}] matched 0 roles at {company_rec['name']}.")
+            print(f"     Skipping — not falling back to unfiltered results.")
         if not jobs and posted_days:
             print(f"\n  ↩  Date filter (last {posted_days}d) matched 0 roles.")
             print(f"     Retrying without date restriction (keeping keywords/location)...")
@@ -7401,10 +7402,18 @@ async def apply_to_company(
                     errors += 1
 
             except Exception as exc:
-                err = str(exc)[:80]
+                err_msg = str(exc)
+                if isinstance(exc, BrokenPipeError):
+                    break  # pipe closed — process is stopping
                 _elapsed = time.perf_counter() - _job_start
-                print(f"          → error: {err}  ⏱ {_elapsed:.0f}s\n")
-                log_applied(company, job_ats, title, job_url, f"error: {err}", email, location=loc_str)
+                if "Target crashed" in err_msg:
+                    err = "error: browser renderer crashed"
+                elif "Target page, context or browser has been closed" in err_msg:
+                    err = "error: browser closed unexpectedly"
+                else:
+                    err = f"error: {err_msg[:80]}"
+                print(f"          → {err}  ⏱ {_elapsed:.0f}s\n", flush=True)
+                log_applied(company, job_ats, title, job_url, err, email, location=loc_str)
                 errors += 1
 
             finally:
@@ -7727,4 +7736,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        # Pipe closed (e.g. dashboard stopped) — exit silently
+        import os
+        os._exit(0)

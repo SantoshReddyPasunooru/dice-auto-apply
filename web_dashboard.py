@@ -14,6 +14,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -434,13 +435,37 @@ def api_run(feature):
         if body.get("easy_apply") is not None:
             cmd += ["--easy-apply", str(body["easy_apply"]).lower()]
     elif feature == "companies_apply":
-        company = body.get("company", "")
-        if not company:
-            return jsonify({"ok": False, "error": "select a company first"})
-        cmd = [sys.executable, "company_apply.py",
-               "--company", company,
-               "--profile", PROFILE_EMAIL,
-               "--all-roles"]
+        companies = body.get("companies", [])
+        if not companies:
+            return jsonify({"ok": False, "error": "select at least one company"})
+
+        # Build shared filter args
+        filter_args: list[str] = ["--profile", PROFILE_EMAIL]
+        keywords   = body.get("keywords", "").strip()
+        location   = body.get("location", "").strip()
+        date       = body.get("date", "").strip()
+        experience = body.get("experience", "").strip()
+        if keywords:
+            filter_args += ["--keywords", keywords]
+        else:
+            filter_args += ["--all-roles"]
+        if location:
+            filter_args += ["--location", location]
+        if date:
+            filter_args += ["--posted-days", date]
+        if experience:
+            filter_args += ["--experience", experience]
+
+        # For a single company use a plain list; for multiple, chain via bash -c
+        if len(companies) == 1:
+            cmd = [sys.executable, "company_apply.py",
+                   "--company", companies[0]] + filter_args
+        else:
+            parts = []
+            for c in companies:
+                args = [sys.executable, "company_apply.py", "--company", c] + filter_args
+                parts.append(" ".join(shlex.quote(a) for a in args))
+            cmd = ["bash", "-c", " && ".join(parts)]
     else:
         return jsonify({"ok": False, "error": "unknown feature"})
 

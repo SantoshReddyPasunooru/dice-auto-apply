@@ -784,79 +784,65 @@ def _compose_cold_email_sync(
     profile: dict,
 ) -> tuple[str, str]:
     """
-    Use Ollama to write a cold outreach email.
+    Build a structured cold outreach email with bullet-point candidate details.
     Returns (subject, body).
-    recruiter_name should be the raw author string from LinkedIn; we resolve
-    the first name here so the greeting is always personal, never generic.
     """
-    title     = job_details.get("title", "the role")
-    company   = job_details.get("company", "") or "your company"
-    name      = profile.get("name", "Applicant")
-    work_auth = profile.get("work_auth", "OPT")
-    years     = profile.get("years_experience", 3)
-    skills    = profile.get("skills", "")[:120]
-    location  = profile.get("location", "")
-    available = profile.get("available_to_start", "immediately")
+    title            = job_details.get("title", "the role")
+    company          = job_details.get("company", "") or ""
+    name             = profile.get("name", "Applicant")
+    work_auth        = profile.get("work_auth", "OPT")
+    visa_expiry      = profile.get("visa_expiry", "")
+    w2_c2c           = profile.get("w2_c2c", "W2")
+    open_to_f2f      = profile.get("open_to_f2f", "Yes")
+    years            = profile.get("years_experience", 3)
+    skills           = (profile.get("skills", "") or "")[:200]
+    location         = profile.get("location", "")
+    available        = profile.get("available_to_start", "immediately")
+    linkedin         = profile.get("linkedin_url", "")
+    phone            = profile.get("phone", "")
+    previous_clients = profile.get("previous_clients", "")
 
-    # Resolve the recruiter's first name — try author field first, then post body
+    # Resolve the recruiter's first name
     first_name = _extract_first_name(recruiter_name or "")
     if not first_name:
         first_name = _extract_name_from_post(post_snippet)
-    # greeting: "Hi Sarah," if found, otherwise just "Hi," — never "Hiring Manager"
     greeting = f"Hi {first_name}," if first_name else "Hi,"
 
-    subject = f"Interested in {title} — {work_auth} candidate, {years} yrs exp"
+    company_label = f" at {company}" if company else ""
+    subject = f"Interested in {title}{company_label} — {work_auth} | {years}+ yrs exp"
 
-    try:
-        import ollama
-        recruiter_line = (
-            f"Recruiter first name: {first_name}" if first_name
-            else "Recruiter name: unknown — do NOT invent a name or use generic titles"
-        )
-        prompt = (
-            f"Write a short cold outreach email from a job seeker to a recruiter "
-            f"who posted a job on LinkedIn.\n\n"
-            f"{recruiter_line}\n"
-            f"Role posted: {title} at {company}\n"
-            f"Their post (snippet): {post_snippet[:250]}\n\n"
-            f"Candidate:\n"
-            f"  Name: {name}\n"
-            f"  Title: {profile.get('current_title', 'Software Engineer')}\n"
-            f"  Experience: {years} years\n"
-            f"  Skills: {skills}\n"
-            f"  Location: {location}\n"
-            f"  Work auth: {work_auth}\n"
-            f"  Available: {available}\n\n"
-            f"Rules:\n"
-            f"- Start with exactly: {greeting}\n"
-            f"- 3-5 sentences max\n"
-            f"- Reference their LinkedIn post naturally in the first sentence\n"
-            f"- Mention work authorization and availability\n"
-            f"- Professional, warm, confident tone\n"
-            f"- End with: Best regards,\\n{name}\n"
-            f"- Do NOT add a subject line inside the body\n"
-            f"- Do NOT use placeholders like [Your Name] or [Company]\n"
-            f"- Do NOT use generic names like 'Hiring Manager', 'Team', 'Recruiter'\n"
-            f"- Write only the email body, nothing else\n"
-        )
-        resp = ollama.chat(model=OLLAMA_MODEL, messages=[{"role": "user", "content": prompt}])
-        body = resp.message.content.strip()
-        body = re.sub(r"(?i)^subject\s*:.*\n?", "", body).strip()
-        # Ensure greeting is correct even if model ignored the instruction
-        if not body.startswith("Hi"):
-            body = f"{greeting}\n\n{body}"
-    except Exception:
-        body = (
-            f"{greeting}\n\n"
-            f"I came across your LinkedIn post about the {title} opportunity at {company} "
-            f"and wanted to reach out directly.\n\n"
-            f"I have {years} years of experience in {skills[:80]}, "
-            f"currently based in {location}. "
-            f"I'm on {work_auth} and available to start {available}.\n\n"
-            f"I'd love to connect and discuss if there's a fit. "
-            f"Please find my resume attached.\n\n"
-            f"Best regards,\n{name}"
-        )
+    # Opening line references their post
+    opener = (
+        f"I came across your post about the {title}{company_label} opportunity "
+        f"and wanted to reach out directly with my profile."
+    )
+
+    bullets = [
+        f"• Location: {location}",
+        f"• Work Authorization: {work_auth}",
+    ]
+    if visa_expiry:
+        bullets.append(f"• Visa / EAD Expiry: {visa_expiry}")
+    bullets.append(f"• W2 / C2C: {w2_c2c}")
+    bullets.append(f"• Open to F2F Interview: {open_to_f2f}")
+    if previous_clients:
+        bullets.append(f"• Previous Clients: {previous_clients}")
+    if linkedin:
+        bullets.append(f"• LinkedIn: {linkedin}")
+    if phone:
+        bullets.append(f"• Phone: {phone}")
+    bullets.append(f"• Experience: {years}+ years ({skills})")
+    bullets.append(f"• Availability: {available}")
+
+    body = (
+        f"{greeting}\n\n"
+        f"{opener}\n\n"
+        f"Candidate Details:\n"
+        + "\n".join(bullets)
+        + "\n\nPlease find my updated resume attached. "
+        "Would you be interested in moving forward with my profile?\n\n"
+        f"Best regards,\n{name}"
+    )
 
     return subject, body
 

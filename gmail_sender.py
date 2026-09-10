@@ -223,50 +223,64 @@ class GmailSender:
             print(f"      → [Gmail] resume attach error: {e}")
 
     def _compose_dice(self, to: str, job_title: str, company: str,
-                      job_url: str, resume: Path | None) -> MIMEMultipart:
-        company_label = f" at {company.strip()}" if company.strip() else ""
-        has_resume    = bool(resume and resume.exists())
-        name          = self.sender_name
+                      job_url: str, resume: Path | None,
+                      profile: dict | None = None) -> MIMEMultipart:
+        company_label    = f" at {company.strip()}" if company.strip() else ""
+        p                = profile or {}
+        name             = p.get("name", self.sender_name) or self.sender_name
+        work_auth        = p.get("work_auth", "OPT")
+        visa_expiry      = p.get("visa_expiry", "")
+        w2_c2c           = p.get("w2_c2c", "W2")
+        open_to_f2f      = p.get("open_to_f2f", "Yes")
+        years            = p.get("years_experience", 3)
+        skills           = (p.get("skills", "") or "")[:200]
+        location         = p.get("location", "")
+        available        = p.get("available_to_start", "immediately")
+        linkedin         = p.get("linkedin_url", "")
+        phone            = p.get("phone", "")
+        previous_clients = p.get("previous_clients", "")
+
+        bullets = [f"• Location: {location}", f"• Work Authorization: {work_auth}"]
+        if visa_expiry:
+            bullets.append(f"• Visa / EAD Expiry: {visa_expiry}")
+        bullets.append(f"• W2 / C2C: {w2_c2c}")
+        bullets.append(f"• Open to F2F Interview: {open_to_f2f}")
+        if previous_clients:
+            bullets.append(f"• Previous Clients: {previous_clients}")
+        if linkedin:
+            bullets.append(f"• LinkedIn: {linkedin}")
+        if phone:
+            bullets.append(f"• Phone: {phone}")
+        bullets.append(f"• Experience: {years}+ years ({skills})")
+        bullets.append(f"• Availability: {available}")
+        bullets_plain = "\n".join(bullets)
+        bullets_html  = "".join(f"<li>{b[2:]}</li>" for b in bullets)
 
         msg = MIMEMultipart("mixed")
-        msg["Subject"] = f"Application for {job_title}{company_label}"
+        msg["Subject"] = f"Application for {job_title}{company_label} — {work_auth} | {years}+ yrs exp"
         msg["From"]    = self.sender_email
         msg["To"]      = to
 
-        plain = f"""\
-Hi,
-
-I came across the {job_title} opening{company_label} on Dice.com and wanted to reach out directly.
-
-I have 8+ years of software engineering experience specializing in Generative AI, LLMs, \
-Python, RAG pipelines, LangChain, and AWS. I'm based in Austin, TX and open to both \
-contract and full-time opportunities.
-
-I've already submitted my application via Dice ({job_url}), but happy to connect directly \
-if you'd like to discuss the role or my background further.
-
-{"Please find my resume attached." if has_resume else ""}
-
-Looking forward to hearing from you.
-
-Best regards,
-{name}
-"""
-        html = f"""\
-<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;">
-<p>Hi,</p>
-<p>I came across the <strong>{job_title}</strong> opening{company_label} on Dice.com \
-and wanted to reach out directly.</p>
-<p>I have <strong>8+ years of software engineering experience</strong> specializing in
-<strong>Generative AI, LLMs, Python, RAG pipelines, LangChain, and AWS</strong>.
-I'm based in Austin, TX and open to both contract and full-time opportunities.</p>
-<p>I've already submitted my application via Dice
-(<a href="{job_url}">{job_url}</a>), but happy to connect directly if you'd like
-to discuss the role or my background further.</p>
-{"<p>Please find my resume attached.</p>" if has_resume else ""}
-<p>Looking forward to hearing from you.</p>
-<p>Best regards,<br><strong>{name}</strong></p>
-</body></html>"""
+        plain = (
+            f"Hi,\n\n"
+            f"I came across the {job_title} opening{company_label} on Dice.com "
+            f"and wanted to share my profile directly.\n\n"
+            f"Candidate Details:\n{bullets_plain}\n\n"
+            f"Please find my updated resume attached. "
+            f"Would you be interested in moving forward with my profile?\n\n"
+            f"Best regards,\n{name}"
+        )
+        html = (
+            '<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;">'
+            "<p>Hi,</p>"
+            f"<p>I came across the <strong>{job_title}</strong> opening{company_label} on Dice.com "
+            "and wanted to share my profile directly.</p>"
+            f"<p><strong>Candidate Details:</strong></p><ul>{bullets_html}</ul>"
+            "<p>Please find my updated resume attached. "
+            "Would you be interested in moving forward with my profile?</p>"
+            f"<p>Best regards,<br><strong>{name}</strong></p>"
+            "</body></html>"
+        )
 
         alt = MIMEMultipart("alternative")
         alt.attach(MIMEText(plain, "plain"))
@@ -307,8 +321,18 @@ to discuss the role or my background further.</p>
             svc = self.get_service()
             if not svc:
                 return False
+            # Load profile data for this sender so bullets use real info
+            profile_data: dict = {}
+            try:
+                profiles_path = Path(__file__).parent / "profiles.json"
+                if profiles_path.exists():
+                    profile_data = json.loads(profiles_path.read_text()).get(
+                        self.sender_email, {}
+                    )
+            except Exception:
+                pass
             resume = self.pick_resume(job_title)
-            msg    = self._compose_dice(to, job_title, company, job_url, resume)
+            msg    = self._compose_dice(to, job_title, company, job_url, resume, profile_data)
             raw    = base64.urlsafe_b64encode(msg.as_bytes()).decode()
             svc.users().messages().send(userId="me", body={"raw": raw}).execute()
             label  = resume.name if resume else "none"

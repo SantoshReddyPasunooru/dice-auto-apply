@@ -316,6 +316,10 @@ _GENERIC_NAMES = {
     "hiring", "manager", "team", "hr", "recruiter", "talent", "acquisition",
     "staffing", "noreply", "no-reply", "hello", "info", "jobs", "careers",
     "support", "admin", "contact", "dear", "there",
+    "do-not-reply", "donotreply", "do", "not", "reply", "notifications",
+    "notification", "alerts", "automated", "mailer", "bounce", "postmaster",
+    "updates", "news", "no", "career", "brew", "digest", "weekly", "daily",
+    "newsletter", "insider", "report",
 }
 
 
@@ -326,7 +330,8 @@ def _extract_first_name(from_raw: str) -> str:
     """
     name = re.sub(r"<[^>]+>", "", from_raw).strip().strip('"').strip("'")
     first = name.split()[0] if name else ""
-    if not first or first.lower() in _GENERIC_NAMES or not re.match(r"^[A-Za-z\-']{2,}$", first):
+    first = first.rstrip("-.,;:")          # strip trailing punctuation (e.g. "Diya-")
+    if not first or first.lower() in _GENERIC_NAMES or not re.match(r"^[A-Za-z']{2,}$", first):
         return ""
     return first.capitalize()
 
@@ -391,8 +396,11 @@ _JUNK_SENDER_DOMAINS = {
     "dice.com", "indeedemail.com", "indeed.com", "glassdoor.com",
     "ziprecruiter.com", "monster.com", "careerbuilder.com",
     "lever.co", "greenhouse.io", "workday.com", "icims.com",
-    "myworkdayjobs.com", "successfactors.com", "taleo.net",
+    "myworkdayjobs.com", "myworkday.com", "email.myworkdayjobs.com",
+    "successfactors.com", "taleo.net",
     "jobright.ai", "leoforce.com", "careers.leoforce.com",
+    "substack.com", "beehiiv.com", "mailchimp.com", "constantcontact.com",
+    "sendgrid.net", "mailgun.org",
     # Training / courses / events (not recruiter replies)
     "interviewkickstart.com", "udemy.com", "coursera.org",
     "pluralsight.com", "linkedin-email.com",
@@ -522,7 +530,13 @@ def _clean_reply(text: str, greeting: str, name: str) -> str:
     """Strip model artifacts: placeholder brackets, subject lines, wrong greetings."""
     text = re.sub(r"(?i)^subject\s*:.*\n?", "", text).strip()
     text = _PLACEHOLDER_RE.sub("", text)          # remove [Hiring Manager] etc.
-    text = re.sub(r"\[[^\]]{1,40}\]", "", text)   # catch any remaining [...]
+    text = re.sub(r"\[[^\]]{1,200}\]", "", text)  # catch any remaining [...] (incl. long instructions)
+    text = re.sub(r"  +", " ", text)              # collapse double spaces from removed placeholders
+    text = re.sub(r" +([.,!?])", r"\1", text)     # fix orphaned punctuation after removal
+    text = re.sub(                                 # remove dangling prepositions before punctuation
+        r"\s+\b(in|about|on|for|with|at|to|of|regarding|around|by)\b\s*([.,!?])",
+        r"\2", text
+    )
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if not re.match(r"^Hi\b", text, re.IGNORECASE):
         text = f"{greeting}\n\n{text}"
@@ -540,119 +554,182 @@ def _generate_reply_sync(
     recruiter_first_name: str = "",
     thread_history: list | None = None,
 ) -> str:
-    category  = clf.get("category", "REPLY_NEEDED")
-    name      = profile.get("name", "Applicant")
-    work_auth = profile.get("work_auth", "OPT")
-    phone     = profile.get("phone", "")
-    skills    = (profile.get("skills", "") or "")[:120]
-    location  = profile.get("location", "")
-    available = profile.get("available_to_start", "immediately")
-    years     = profile.get("years_experience", 3)
-    title     = profile.get("current_title", "Software Engineer")
-    linkedin  = profile.get("linkedin_url", "")
+    category         = clf.get("category", "REPLY_NEEDED")
+    name             = profile.get("name", "Applicant")
+    work_auth        = profile.get("work_auth", "OPT")
+    visa_expiry      = profile.get("visa_expiry", "")
+    w2_c2c           = profile.get("w2_c2c", "W2")
+    open_to_f2f      = profile.get("open_to_f2f", "Yes")
+    phone            = profile.get("phone", "")
+    skills           = (profile.get("skills", "") or "")[:200]
+    location         = profile.get("location", "")
+    available        = profile.get("available_to_start", "immediately")
+    years            = profile.get("years_experience", 3)
+    title            = profile.get("current_title", "Software Engineer")
+    linkedin         = profile.get("linkedin_url", "")
+    previous_clients = profile.get("previous_clients", "")
 
-    greeting  = f"Hi {recruiter_first_name}," if recruiter_first_name else "Hi,"
+    greeting = f"Hi {recruiter_first_name}," if recruiter_first_name else "Hi,"
 
-    # ── Build conversation history block ──────────────────────────────────────
     history_msgs = thread_history or []
-    is_followup  = len(history_msgs) > 1   # more than just the current message
+    is_followup  = len(history_msgs) > 1
+
+    # ── Build prior-conversation block for follow-ups ─────────────────────────
     history_block = ""
     if is_followup:
         lines = ["PRIOR CONVERSATION (most recent last):"]
-        for msg in history_msgs[:-1]:          # all but the current recruiter message
-            role  = "Me" if msg["role"] == "me" else "Recruiter"
+        for msg in history_msgs[:-1]:
+            role = "Me" if msg["role"] == "me" else "Recruiter"
             lines.append(f"[{role}]: {msg['body'][:280]}")
             lines.append("---")
         history_block = "\n".join(lines) + "\n\n"
 
-    followup_note = (
-        "IMPORTANT: This is a follow-up in an ONGOING conversation. "
-        "Reference the prior exchange naturally. Do NOT re-introduce yourself "
-        "as if meeting for the first time.\n\n"
-        if is_followup else ""
+    # ── Profile block (used in both modes) ────────────────────────────────────
+    visa_line     = f"  Visa/Work auth : {work_auth}" + (f", expires {visa_expiry}" if visa_expiry else "")
+    clients_line  = f"  Previous clients : {previous_clients}" if previous_clients else ""
+    phone_line    = f"  Phone          : {phone}" if phone else ""
+    linkedin_line = f"  LinkedIn       : {linkedin}" if linkedin else ""
+    profile_block = (
+        f"MY PROFILE:\n"
+        f"  Full name      : {name}\n"
+        f"  Title          : {title}  |  {years} yrs experience\n"
+        f"  Skills         : {skills}\n"
+        f"{visa_line}\n"
+        + (f"{clients_line}\n" if clients_line else "")
+        + f"  Location       : {location}\n"
+        f"  Available      : {available}\n"
+        + (f"{phone_line}\n" if phone_line else "")
+        + (f"{linkedin_line}\n" if linkedin_line else "")
     )
 
-    # ── Category-specific task instructions ───────────────────────────────────
-    if category == "INTERVIEW":
-        task = (
-            "The recruiter wants to schedule an interview or introductory call.\n"
-            "Write a reply that:\n"
-            "- Expresses genuine enthusiasm for this specific role/company\n"
-            "- Confirms you are fully available and eager to connect\n"
-            "- Proposes 2-3 concrete time slots (e.g. 'Monday 2-5pm ET or Tuesday anytime')\n"
-            f"- Mentions you are on {work_auth} and can start {available}\n"
-            "- Asks if there's anything specific they'd like you to prepare\n"
-        )
-    elif category == "RTR":
-        phone_line = f"Phone: {phone}" if phone else ""
-        task = (
-            "The recruiter is requesting Right-to-Represent (RTR) authorization.\n"
-            "Write a reply that:\n"
-            f"- IMMEDIATELY and clearly grants authorization\n"
-            f"- States your full legal name: {name}\n"
-            f"- States your work authorization status: {work_auth}\n"
-            f"- States your availability: {available}\n"
-            f"- Includes your location: {location}\n"
-            + (f"- Includes your phone: {phone}\n" if phone else "")
-            + "- If the recruiter hasn't shared the job description or pay rate yet, politely asks for it\n"
-            "- Keeps it professional and direct — RTR replies must be crisp\n"
-        )
-    elif category == "INFO_REQUEST":
-        task = (
-            "The recruiter is asking for information (resume, work auth, availability, rate, etc.).\n"
-            "Write a reply that:\n"
-            f"- Provides your full name: {name}\n"
-            f"- Confirms work authorization: {work_auth}\n"
-            f"- States availability: {available}\n"
-            f"- States location: {location}\n"
-            + (f"- Provides phone: {phone}\n" if phone else "")
-            + (f"- Includes LinkedIn: {linkedin}\n" if linkedin else "")
-            + "- Mentions that your resume is attached\n"
-            "- Asks one specific follow-up question about the role (e.g. remote/onsite, expected start, rate range)\n"
-        )
-    else:  # REPLY_NEEDED — general interest / first follow-up
-        task = (
-            "The recruiter is interested or following up.\n"
-            "Write a reply that:\n"
-            "- Expresses genuine interest in the specific role or company they mentioned\n"
-            f"- Briefly highlights 1-2 of your most relevant skills: {skills[:80]}\n"
-            f"- Mentions you are on {work_auth} and available {available}\n"
-            "- Asks ONE specific, engaging follow-up question to keep the conversation going\n"
-            "  (good examples: 'Is the position open to OPT candidates?', "
-            "'Is this remote or hybrid?', 'What's the expected start date?', "
-            "'Could you share the job description?')\n"
-            "- Sounds conversational and human — not a form letter\n"
-        )
-
-    # ── Full prompt ───────────────────────────────────────────────────────────
     recruiter_name_line = (
         f"Recruiter first name: {recruiter_first_name}\n"
         if recruiter_first_name
         else "Recruiter name unknown — use 'Hi,' as greeting, never invent a name or title\n"
     )
-    prompt = (
-        f"{history_block}"
-        f"CURRENT RECRUITER MESSAGE:\n{recruiter_body[:600]}\n\n"
-        f"{followup_note}"
-        f"TASK:\n{task}\n"
-        f"MY PROFILE:\n"
-        f"  Full name : {name}\n"
-        f"  Title     : {title}  |  {years} yrs experience\n"
-        f"  Skills    : {skills}\n"
-        f"  Work auth : {work_auth}\n"
-        f"  Location  : {location}\n"
-        f"  Available : {available}\n"
-        + (f"  Phone     : {phone}\n" if phone else "")
-        + (f"  LinkedIn  : {linkedin}\n" if linkedin else "")
-        + f"\n{recruiter_name_line}"
+
+    common_rules = (
         f"\nRULES (follow exactly):\n"
         f"- Start with exactly: {greeting}\n"
-        f"- 3-5 sentences, warm and professional, no corporate jargon\n"
-        f"- NEVER use [placeholder], [Name], [Hiring Manager], [Recruiter Name], or any text in square brackets\n"
+        f"- NEVER use [placeholder], [Name], [Hiring Manager], or any text in square brackets\n"
+        f"- NEVER reference a company name unless it was explicitly mentioned in the recruiter's message\n"
         f"- NEVER say 'I hope this email finds you well' or similar filler openers\n"
         f"- End with: Best regards,\n{name}\n"
         f"- Output the email body ONLY — no subject line, no preamble\n"
     )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 1 — FIRST CONTACT: structured bullet-point profile pitch
+    # Built directly — no Ollama needed, format must be exact every time.
+    # ══════════════════════════════════════════════════════════════════════════
+    if not is_followup:
+        rtr_opener = (
+            "You have my authorization to represent me for this position.\n\n"
+            if category == "RTR" else ""
+        )
+        bullets = [
+            f"• Location: {location}",
+            f"• Work Authorization: {work_auth}",
+        ]
+        if visa_expiry:
+            bullets.append(f"• Visa / EAD Expiry: {visa_expiry}")
+        bullets.append(f"• W2 / C2C: {w2_c2c}")
+        bullets.append(f"• Open to F2F Interview: {open_to_f2f}")
+        if previous_clients:
+            bullets.append(f"• Previous Clients: {previous_clients}")
+        if linkedin:
+            bullets.append(f"• LinkedIn: {linkedin}")
+        if phone:
+            bullets.append(f"• Phone: {phone}")
+        bullets.append(f"• Experience: {years}+ years ({skills})")
+        bullets.append(f"• Availability: {available}")
+
+        rtr_close = (
+            "\nPlease go ahead and submit my profile. "
+            "Could you share the JD and pay rate if you haven't already?"
+            if category == "RTR" else
+            "\nPlease find my updated resume attached. "
+            "Would you be interested in moving forward with my profile?"
+        )
+
+        body = (
+            f"{greeting}\n\n"
+            f"{rtr_opener}"
+            f"Here are my details:\n\n"
+            f"Candidate Details:\n"
+            + "\n".join(bullets)
+            + f"\n{rtr_close}\n\n"
+            f"Best regards,\n{name}"
+        )
+        return body
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 2 — FOLLOW-UP: answer the specific question concisely
+    # ══════════════════════════════════════════════════════════════════════════
+    else:
+        if category == "INTERVIEW":
+            task = (
+                "The recruiter wants to schedule an interview or call.\n"
+                "Write a short reply (3-4 sentences) that:\n"
+                "- Confirms you are available and excited\n"
+                "- Proposes 2-3 specific time slots (e.g. 'Monday 2-5 PM CT or Tuesday anytime')\n"
+                f"- Mentions you can start {available}\n"
+            )
+            fallback = (
+                f"{greeting}\n\n"
+                f"Absolutely, I'd love to connect! I'm available Monday through Friday, "
+                f"flexible on timing — Monday 2–5 PM CT or Tuesday anytime work well for me. "
+                f"Please share a slot and I'll confirm right away.\n\nBest regards,\n{name}"
+            )
+        elif category == "RTR":
+            task = (
+                "The recruiter is requesting RTR authorization.\n"
+                "Write a crisp reply (3-4 sentences) that:\n"
+                f"- Immediately grants authorization, states full name: {name}\n"
+                f"- States work auth: {work_auth}" + (f", expires {visa_expiry}" if visa_expiry else "") + "\n"
+                + (f"- Includes phone: {phone}\n" if phone else "")
+                + "- Asks for job description / rate if not already shared\n"
+            )
+            fallback = (
+                f"{greeting}\n\n"
+                f"You have my authorization to represent me — full name: {name}. "
+                f"Work auth: {work_auth}"
+                + (f", EAD expires {visa_expiry}" if visa_expiry else "")
+                + (f". Phone: {phone}." if phone else ".")
+                + f" Please go ahead and submit. Could you share the JD and rate if you haven't already?\n\n"
+                f"Best regards,\n{name}"
+            )
+        else:
+            # Specific follow-up question — answer only what was asked
+            task = (
+                "The recruiter is asking a specific follow-up question in an ongoing conversation.\n"
+                "Read their message carefully and answer ONLY what they asked. Keep it to 2-3 sentences.\n"
+                "Do NOT re-introduce yourself. Do NOT send a generic profile pitch.\n"
+                "Examples of specific answers:\n"
+                "  - If they ask visa expiry → state the exact date\n"
+                "  - If they ask about face-to-face → say yes/no + location\n"
+                "  - If they ask rate/salary → state your expectation\n"
+                "  - If they ask availability → give a specific date or timeframe\n"
+            )
+            fallback = (
+                f"{greeting}\n\n"
+                f"Happy to clarify — I'm on {work_auth}"
+                + (f", EAD expires {visa_expiry}" if visa_expiry else "")
+                + f", based in {location}, and available {available}. "
+                + (f"You can reach me at {phone}. " if phone else "")
+                + f"Let me know if you need anything else!\n\nBest regards,\n{name}"
+            )
+
+        prompt = (
+            f"{history_block}"
+            f"CURRENT RECRUITER MESSAGE:\n{recruiter_body[:600]}\n\n"
+            f"TASK:\n{task}\n"
+            f"{profile_block}\n"
+            f"{recruiter_name_line}"
+            f"{common_rules}"
+            f"- 2-4 sentences for follow-up replies — be concise and specific\n"
+            f"- Do NOT repeat information already exchanged in the prior conversation\n"
+        )
 
     try:
         import ollama
@@ -660,55 +737,7 @@ def _generate_reply_sync(
         body = resp.message.content.strip()
         return _clean_reply(body, greeting, name)
     except Exception:
-        # Hard-coded fallbacks — no placeholders, no generics
-        if category == "INTERVIEW":
-            return _clean_reply(
-                f"{greeting}\n\n"
-                f"Thank you for reaching out — I'm genuinely excited about this opportunity "
-                f"and would love to connect.\n\n"
-                f"I'm available Monday through Friday, flexible on timing. "
-                f"Please share a few slots and I'll confirm right away. "
-                f"I'm on {work_auth} and can start {available}.\n\n"
-                f"Looking forward to speaking with you!\n\nBest regards,\n{name}",
-                greeting, name,
-            )
-        if category == "RTR":
-            phone_str = f" My phone is {phone}." if phone else ""
-            return _clean_reply(
-                f"{greeting}\n\n"
-                f"I'm happy to authorize you to represent me for this position.\n\n"
-                f"Full name: {name}\n"
-                f"Work authorization: {work_auth}\n"
-                f"Availability: {available}\n"
-                f"Location: {location}"
-                + (f"\nPhone: {phone}" if phone else "")
-                + f"\n\nPlease go ahead and submit my profile. "
-                f"Could you also share the job description and rate if you haven't already?\n\n"
-                f"Best regards,\n{name}",
-                greeting, name,
-            )
-        if category == "INFO_REQUEST":
-            return _clean_reply(
-                f"{greeting}\n\n"
-                f"Happy to share my details — please find my resume attached.\n\n"
-                f"Full name: {name}\n"
-                f"Work authorization: {work_auth}\n"
-                f"Location: {location}\n"
-                f"Availability: {available}"
-                + (f"\nPhone: {phone}" if phone else "")
-                + f"\n\nCould you share the job description or expected pay range so I can confirm fit?\n\n"
-                f"Best regards,\n{name}",
-                greeting, name,
-            )
-        return _clean_reply(
-            f"{greeting}\n\n"
-            f"Thank you for reaching out — I'm very interested in this role.\n\n"
-            f"I have {years} years of experience in {skills[:70]}, currently based in {location}. "
-            f"I'm on {work_auth} and available {available}. "
-            f"Could you share more details about the position or the expected start date?\n\n"
-            f"Best regards,\n{name}",
-            greeting, name,
-        )
+        return _clean_reply(fallback, greeting, name)
 
 
 # ── Core monitor loop (one per profile) ──────────────────────────────────────
@@ -725,6 +754,7 @@ async def _handle_new_message(
     if msg_id in processed_ids:
         return
     processed_ids.add(msg_id)
+    await asyncio.to_thread(_save_processed_ids, email, processed_ids)
 
     # Cheap metadata fetch for both verification-code detection and junk filter
     try:
@@ -775,6 +805,14 @@ async def _handle_new_message(
     )
     is_followup = len(thread_history) > 1
 
+    # Guard: if our reply is already the last message in this thread, skip — avoids
+    # duplicate sends when the original recruiter message remains unread across restarts.
+    if thread_history and thread_history[-1]["role"] == "me":
+        _log(tag, "⏭", "Already replied to thread — skipping duplicate",
+             f"{from_email} | {subject[:30]}")
+        await asyncio.to_thread(_mark_read, svc, msg_id)
+        return
+
     async with _lock:
         now_str = datetime.now().strftime("%H:%M:%S")
         stats.last_from       = from_email[:30]
@@ -812,11 +850,12 @@ async def _handle_new_message(
                 recruiter_first, thread_history,
             )
 
-            # Attach resume: always on INFO_REQUEST/RTR; also on first-contact replies
+            # First contact: always attach resume.
+            # Follow-up: only attach if recruiter explicitly asked for it.
             wants_resume = (
-                clf.get("wants_resume", False)
-                or category in ("INFO_REQUEST", "RTR")
-                or (category == "REPLY_NEEDED" and not is_followup)
+                not is_followup
+                or clf.get("wants_resume", False)
+                or category == "INFO_REQUEST"
             )
             job_title = profile_data.get("current_title", "software engineer")
             resume = gs.pick_resume(job_title) if wants_resume else None
@@ -866,6 +905,33 @@ async def _handle_new_message(
                 _log(tag, "✗", "Reply failed", from_email)
 
 
+def _processed_ids_path(email: str) -> Path:
+    safe = re.sub(r"[^a-z0-9]", "_", email.lower())
+    return Path.home() / f".dice-playwright-profile-{safe}" / "gmail_processed_ids.json"
+
+
+def _load_processed_ids(email: str) -> set[str]:
+    p = _processed_ids_path(email)
+    try:
+        if p.exists():
+            data = json.loads(p.read_text())
+            return set(data.get("ids", []))
+    except Exception:
+        pass
+    return set()
+
+
+def _save_processed_ids(email: str, ids: set[str]):
+    p = _processed_ids_path(email)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Keep only the last 5000 IDs to avoid unbounded growth
+        trimmed = list(ids)[-5000:]
+        p.write_text(json.dumps({"ids": trimmed}))
+    except Exception:
+        pass
+
+
 async def _monitor_profile(email: str, profile_data: dict,
                            gs: gmail_sender.GmailSender):
     tag   = email.split("@")[0][:12]
@@ -873,7 +939,7 @@ async def _monitor_profile(email: str, profile_data: dict,
     stats.name         = profile_data.get("name", email.split("@")[0])
     stats.uptime_start = datetime.now().strftime("%H:%M:%S")
 
-    processed_ids: set[str] = set()
+    processed_ids: set[str] = _load_processed_ids(email)   # persisted across restarts
     history_id:    str | None = None
     svc = None
 

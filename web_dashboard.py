@@ -442,6 +442,7 @@ def api_run(feature):
         )
         with _lock:
             PROCESSES[feature] = proc
+            LOG_BUFFERS[feature].clear()   # fresh log for each new run
         threading.Thread(target=_read_output, args=(feature, proc), daemon=True).start()
         _push_log(feature, f"▶ Started PID {proc.pid}  [{' '.join(cmd)}]")
         return jsonify({"ok": True, "pid": proc.pid})

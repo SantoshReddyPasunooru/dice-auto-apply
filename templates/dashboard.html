@@ -224,7 +224,14 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
 
   <!-- GMAIL MONITOR -->
   <div id="sec-gmail_monitor" class="section">
-    <div class="page-title">📧 Gmail Monitor <span id="badge-gmail_monitor" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">
+      <div class="page-title" style="margin:0">📧 Gmail Monitor <span id="badge-gmail_monitor" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+      <div class="card" style="margin:0;padding:12px 20px;display:flex;align-items:center;gap:16px">
+        <span style="font-size:13px;color:var(--text-muted)">Gmail</span>
+        <span id="gm-conn-badge" class="badge disconnected"><span class="dot"></span>Checking…</span>
+        <button id="gm-connect-btn" class="btn btn-ghost btn-sm" onclick="startFeature('gmail_monitor')" style="display:none">Connect</button>
+      </div>
+    </div>
     <div class="ctrl-row">
       <button id="btn-gmail_monitor" class="btn btn-primary" onclick="startFeature('gmail_monitor')">▶ Start</button>
       <button id="stop-gmail_monitor" class="btn btn-danger" onclick="stopFeature('gmail_monitor')" style="display:none">■ Stop</button>
@@ -665,6 +672,9 @@ function loadStatus() {
     setConn('p-conn-dice',  d.dice,   'connected',    'disconnected');
     setConn('p-conn-ollama',d.ollama, 'running',      'offline');
     setConn('conn-dice2',   d.dice,   'connected',    'disconnected');
+    setConn('gm-conn-badge',d.gmail,  'connected',    'disconnected');
+    const connectBtn = document.getElementById('gm-connect-btn');
+    if (connectBtn) connectBtn.style.display = d.gmail === 'disconnected' ? '' : 'none';
     FEATURES.forEach(f => updateBadge(f, d.processes[f]));
   }).catch(() => {});
 }

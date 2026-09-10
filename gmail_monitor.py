@@ -224,6 +224,47 @@ def _get_sender_email(svc, msg_id: str) -> tuple[str, str]:
     return from_raw, from_email
 
 
+def _get_thread_context(svc, thread_id: str, my_email: str, max_messages: int = 5) -> list[dict]:
+    """
+    Fetch the last *max_messages* messages from a thread.
+    Returns list of {role, from, body} — role is 'me' or 'recruiter'.
+    Used to give the reply generator full conversation context.
+    """
+    try:
+        thread = svc.users().threads().get(
+            userId="me", id=thread_id, format="full"
+        ).execute()
+        messages = thread.get("messages", [])[-max_messages:]
+        result = []
+        for msg in messages:
+            headers = {h["name"]: h["value"] for h in msg["payload"]["headers"]}
+            from_h  = headers.get("From", "")
+            m2      = re.search(r"[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}", from_h)
+            sender  = m2.group().lower() if m2 else ""
+            role    = "me" if my_email.lower() in sender else "recruiter"
+
+            body_parts: list[str] = []
+            def _ex(payload):
+                if payload.get("mimeType") == "text/plain":
+                    data = payload.get("body", {}).get("data", "")
+                    if data:
+                        body_parts.append(
+                            base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+                        )
+                for part in payload.get("parts", []):
+                    _ex(part)
+            _ex(msg["payload"])
+            raw_body = "".join(body_parts) if body_parts else msg.get("snippet", "")
+            # Strip quoted reply chains (lines starting with ">")
+            clean = "\n".join(
+                l for l in raw_body.splitlines() if not l.strip().startswith(">")
+            ).strip()
+            result.append({"role": role, "from": from_h, "body": clean[:400]})
+        return result
+    except Exception:
+        return []
+
+
 def _get_full_message(svc, msg_id: str) -> tuple[str, str, str, str, str, str]:
     """Returns (from_raw, from_email, subject, body_text, thread_id, tab)."""
     msg = svc.users().messages().get(
@@ -470,88 +511,203 @@ def _classify_sync(from_raw: str, subject: str, body: str) -> dict:
 
 # ── Ollama — reply generator ──────────────────────────────────────────────────
 
-def _generate_reply_sync(recruiter_body: str, subject: str,
-                         profile: dict, clf: dict,
-                         recruiter_first_name: str = "") -> str:
+_PLACEHOLDER_RE = re.compile(
+    r"\[(?:Hiring Manager|Recruiter(?: Name)?|Your Name|Candidate Name|Name|"
+    r"First Name|Recipient|Insert Name|Title|Position|Company)[^\]]*\]",
+    re.IGNORECASE,
+)
+
+
+def _clean_reply(text: str, greeting: str, name: str) -> str:
+    """Strip model artifacts: placeholder brackets, subject lines, wrong greetings."""
+    text = re.sub(r"(?i)^subject\s*:.*\n?", "", text).strip()
+    text = _PLACEHOLDER_RE.sub("", text)          # remove [Hiring Manager] etc.
+    text = re.sub(r"\[[^\]]{1,40}\]", "", text)   # catch any remaining [...]
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if not re.match(r"^Hi\b", text, re.IGNORECASE):
+        text = f"{greeting}\n\n{text}"
+    # Make sure it closes with sender name
+    if name.lower() not in text.lower()[-60:]:
+        text = text.rstrip() + f"\n\nBest regards,\n{name}"
+    return text.strip()
+
+
+def _generate_reply_sync(
+    recruiter_body: str,
+    subject: str,
+    profile: dict,
+    clf: dict,
+    recruiter_first_name: str = "",
+    thread_history: list | None = None,
+) -> str:
     category  = clf.get("category", "REPLY_NEEDED")
     name      = profile.get("name", "Applicant")
     work_auth = profile.get("work_auth", "OPT")
-    skills    = (profile.get("skills", "") or "")[:100]
+    phone     = profile.get("phone", "")
+    skills    = (profile.get("skills", "") or "")[:120]
     location  = profile.get("location", "")
     available = profile.get("available_to_start", "immediately")
     years     = profile.get("years_experience", 3)
     title     = profile.get("current_title", "Software Engineer")
+    linkedin  = profile.get("linkedin_url", "")
 
-    # Personal greeting: "Hi Sarah," if name known, otherwise just "Hi,"
-    greeting = f"Hi {recruiter_first_name}," if recruiter_first_name else "Hi,"
+    greeting  = f"Hi {recruiter_first_name}," if recruiter_first_name else "Hi,"
 
+    # ── Build conversation history block ──────────────────────────────────────
+    history_msgs = thread_history or []
+    is_followup  = len(history_msgs) > 1   # more than just the current message
+    history_block = ""
+    if is_followup:
+        lines = ["PRIOR CONVERSATION (most recent last):"]
+        for msg in history_msgs[:-1]:          # all but the current recruiter message
+            role  = "Me" if msg["role"] == "me" else "Recruiter"
+            lines.append(f"[{role}]: {msg['body'][:280]}")
+            lines.append("---")
+        history_block = "\n".join(lines) + "\n\n"
+
+    followup_note = (
+        "IMPORTANT: This is a follow-up in an ONGOING conversation. "
+        "Reference the prior exchange naturally. Do NOT re-introduce yourself "
+        "as if meeting for the first time.\n\n"
+        if is_followup else ""
+    )
+
+    # ── Category-specific task instructions ───────────────────────────────────
     if category == "INTERVIEW":
-        ctx = "The recruiter wants to schedule an interview or introductory call."
+        task = (
+            "The recruiter wants to schedule an interview or introductory call.\n"
+            "Write a reply that:\n"
+            "- Expresses genuine enthusiasm for this specific role/company\n"
+            "- Confirms you are fully available and eager to connect\n"
+            "- Proposes 2-3 concrete time slots (e.g. 'Monday 2-5pm ET or Tuesday anytime')\n"
+            f"- Mentions you are on {work_auth} and can start {available}\n"
+            "- Asks if there's anything specific they'd like you to prepare\n"
+        )
     elif category == "RTR":
-        ctx = "The recruiter is asking for Right-to-Represent authorization to submit my profile to their client."
+        phone_line = f"Phone: {phone}" if phone else ""
+        task = (
+            "The recruiter is requesting Right-to-Represent (RTR) authorization.\n"
+            "Write a reply that:\n"
+            f"- IMMEDIATELY and clearly grants authorization\n"
+            f"- States your full legal name: {name}\n"
+            f"- States your work authorization status: {work_auth}\n"
+            f"- States your availability: {available}\n"
+            f"- Includes your location: {location}\n"
+            + (f"- Includes your phone: {phone}\n" if phone else "")
+            + "- If the recruiter hasn't shared the job description or pay rate yet, politely asks for it\n"
+            "- Keeps it professional and direct — RTR replies must be crisp\n"
+        )
     elif category == "INFO_REQUEST":
-        ctx = "The recruiter is asking for more details: resume, availability, work auth, or rate."
-    else:
-        ctx = "The recruiter is following up or expressing interest."
+        task = (
+            "The recruiter is asking for information (resume, work auth, availability, rate, etc.).\n"
+            "Write a reply that:\n"
+            f"- Provides your full name: {name}\n"
+            f"- Confirms work authorization: {work_auth}\n"
+            f"- States availability: {available}\n"
+            f"- States location: {location}\n"
+            + (f"- Provides phone: {phone}\n" if phone else "")
+            + (f"- Includes LinkedIn: {linkedin}\n" if linkedin else "")
+            + "- Mentions that your resume is attached\n"
+            "- Asks one specific follow-up question about the role (e.g. remote/onsite, expected start, rate range)\n"
+        )
+    else:  # REPLY_NEEDED — general interest / first follow-up
+        task = (
+            "The recruiter is interested or following up.\n"
+            "Write a reply that:\n"
+            "- Expresses genuine interest in the specific role or company they mentioned\n"
+            f"- Briefly highlights 1-2 of your most relevant skills: {skills[:80]}\n"
+            f"- Mentions you are on {work_auth} and available {available}\n"
+            "- Asks ONE specific, engaging follow-up question to keep the conversation going\n"
+            "  (good examples: 'Is the position open to OPT candidates?', "
+            "'Is this remote or hybrid?', 'What's the expected start date?', "
+            "'Could you share the job description?')\n"
+            "- Sounds conversational and human — not a form letter\n"
+        )
+
+    # ── Full prompt ───────────────────────────────────────────────────────────
+    recruiter_name_line = (
+        f"Recruiter first name: {recruiter_first_name}\n"
+        if recruiter_first_name
+        else "Recruiter name unknown — use 'Hi,' as greeting, never invent a name or title\n"
+    )
+    prompt = (
+        f"{history_block}"
+        f"CURRENT RECRUITER MESSAGE:\n{recruiter_body[:600]}\n\n"
+        f"{followup_note}"
+        f"TASK:\n{task}\n"
+        f"MY PROFILE:\n"
+        f"  Full name : {name}\n"
+        f"  Title     : {title}  |  {years} yrs experience\n"
+        f"  Skills    : {skills}\n"
+        f"  Work auth : {work_auth}\n"
+        f"  Location  : {location}\n"
+        f"  Available : {available}\n"
+        + (f"  Phone     : {phone}\n" if phone else "")
+        + (f"  LinkedIn  : {linkedin}\n" if linkedin else "")
+        + f"\n{recruiter_name_line}"
+        f"\nRULES (follow exactly):\n"
+        f"- Start with exactly: {greeting}\n"
+        f"- 3-5 sentences, warm and professional, no corporate jargon\n"
+        f"- NEVER use [placeholder], [Name], [Hiring Manager], [Recruiter Name], or any text in square brackets\n"
+        f"- NEVER say 'I hope this email finds you well' or similar filler openers\n"
+        f"- End with: Best regards,\n{name}\n"
+        f"- Output the email body ONLY — no subject line, no preamble\n"
+    )
 
     try:
         import ollama
-        recruiter_line = (
-            f"Recruiter first name: {recruiter_first_name}" if recruiter_first_name
-            else "Recruiter name: unknown — do NOT invent a name or use generic titles"
-        )
-        prompt = (
-            f"Write a short professional reply to this recruiter email.\n\n"
-            f"Situation: {ctx}\n"
-            f"{recruiter_line}\n"
-            f"Recruiter's email:\n{recruiter_body[:500]}\n\n"
-            f"Candidate:\n"
-            f"  Name: {name} | Title: {title}\n"
-            f"  Experience: {years} yrs | Skills: {skills}\n"
-            f"  Location: {location} | Work auth: {work_auth}\n"
-            f"  Available: {available}\n\n"
-            f"Rules:\n"
-            f"- Start with exactly: {greeting}\n"
-            f"- 3-5 sentences max, no filler phrases\n"
-            f"- INTERVIEW: confirm strong interest, ask for available time slots\n"
-            f"- RTR: confirm authorization, provide full name and work auth status\n"
-            f"- INFO_REQUEST: provide the requested info clearly\n"
-            f"- Always mention work auth status ({work_auth}) if relevant\n"
-            f"- Do NOT use generic salutations like 'Hiring Manager', 'Team', 'Recruiter'\n"
-            f"- Close with: Best regards,\\n{name}\n"
-            f"- Output the email body ONLY — no subject line\n"
-        )
-        resp = ollama.chat(model=OLLAMA_MODEL,
-                           messages=[{"role": "user", "content": prompt}])
+        resp = ollama.chat(model=OLLAMA_MODEL, messages=[{"role": "user", "content": prompt}])
         body = resp.message.content.strip()
-        body = re.sub(r"(?i)^subject\s*:.*\n?", "", body).strip()
-        # Ensure the greeting is correct even if model ignored the instruction
-        if not body.startswith("Hi"):
-            body = f"{greeting}\n\n{body}"
-        return body
+        return _clean_reply(body, greeting, name)
     except Exception:
+        # Hard-coded fallbacks — no placeholders, no generics
         if category == "INTERVIEW":
-            return (
-                f"{greeting}\n\nThank you for reaching out! I'm very excited about this opportunity "
+            return _clean_reply(
+                f"{greeting}\n\n"
+                f"Thank you for reaching out — I'm genuinely excited about this opportunity "
                 f"and would love to connect.\n\n"
-                f"I'm available for a call this week — please share a few time slots and "
-                f"I'll confirm immediately. I'm on {work_auth} and can start {available}.\n\n"
-                f"Looking forward to speaking with you.\n\nBest regards,\n{name}"
+                f"I'm available Monday through Friday, flexible on timing. "
+                f"Please share a few slots and I'll confirm right away. "
+                f"I'm on {work_auth} and can start {available}.\n\n"
+                f"Looking forward to speaking with you!\n\nBest regards,\n{name}",
+                greeting, name,
             )
         if category == "RTR":
-            return (
-                f"{greeting}\n\nI authorize you to represent me for this position. "
-                f"My full name is {name}, and I'm on {work_auth} authorization. "
-                f"I'm available to start {available}.\n\n"
-                f"Please proceed with submitting my profile. Looking forward to your update.\n\n"
-                f"Best regards,\n{name}"
+            phone_str = f" My phone is {phone}." if phone else ""
+            return _clean_reply(
+                f"{greeting}\n\n"
+                f"I'm happy to authorize you to represent me for this position.\n\n"
+                f"Full name: {name}\n"
+                f"Work authorization: {work_auth}\n"
+                f"Availability: {available}\n"
+                f"Location: {location}"
+                + (f"\nPhone: {phone}" if phone else "")
+                + f"\n\nPlease go ahead and submit my profile. "
+                f"Could you also share the job description and rate if you haven't already?\n\n"
+                f"Best regards,\n{name}",
+                greeting, name,
             )
-        return (
-            f"{greeting}\n\nThank you for your response — I'm very interested in this role.\n\n"
-            f"I have {years} years of experience in {skills[:60]}, currently based in "
-            f"{location}. I'm on {work_auth} and available to start {available}. "
-            f"Happy to share any additional details you need.\n\n"
-            f"Best regards,\n{name}"
+        if category == "INFO_REQUEST":
+            return _clean_reply(
+                f"{greeting}\n\n"
+                f"Happy to share my details — please find my resume attached.\n\n"
+                f"Full name: {name}\n"
+                f"Work authorization: {work_auth}\n"
+                f"Location: {location}\n"
+                f"Availability: {available}"
+                + (f"\nPhone: {phone}" if phone else "")
+                + f"\n\nCould you share the job description or expected pay range so I can confirm fit?\n\n"
+                f"Best regards,\n{name}",
+                greeting, name,
+            )
+        return _clean_reply(
+            f"{greeting}\n\n"
+            f"Thank you for reaching out — I'm very interested in this role.\n\n"
+            f"I have {years} years of experience in {skills[:70]}, currently based in {location}. "
+            f"I'm on {work_auth} and available {available}. "
+            f"Could you share more details about the position or the expected start date?\n\n"
+            f"Best regards,\n{name}",
+            greeting, name,
         )
 
 
@@ -613,6 +769,12 @@ async def _handle_new_message(
     category = clf["category"]
     tab_label = f"[{tab}]" if tab != "inbox" else ""
 
+    # Fetch full thread history for context-aware reply generation
+    thread_history = await asyncio.to_thread(
+        _get_thread_context, svc, thread_id, email
+    )
+    is_followup = len(thread_history) > 1
+
     async with _lock:
         now_str = datetime.now().strftime("%H:%M:%S")
         stats.last_from       = from_email[:30]
@@ -640,15 +802,24 @@ async def _handle_new_message(
             if clf.get("is_offer"):
                 stats.offers += 1
 
-            _log(tag, "📨", f"Received [{category}] {tab_label}",
+            ctx_tag = " [follow-up]" if is_followup else " [first contact]"
+            _log(tag, "📨", f"Received [{category}]{ctx_tag} {tab_label}",
                  f"{from_email} → {sender_short} | {subject[:35]}")
 
             recruiter_first = _extract_first_name(from_raw)
             reply_body = await asyncio.to_thread(
-                _generate_reply_sync, body, subject, profile_data, clf, recruiter_first
+                _generate_reply_sync, body, subject, profile_data, clf,
+                recruiter_first, thread_history,
             )
-            wants_resume = clf.get("wants_resume", False)
-            resume = gs.pick_resume("software engineer") if wants_resume else None
+
+            # Attach resume: always on INFO_REQUEST/RTR; also on first-contact replies
+            wants_resume = (
+                clf.get("wants_resume", False)
+                or category in ("INFO_REQUEST", "RTR")
+                or (category == "REPLY_NEEDED" and not is_followup)
+            )
+            job_title = profile_data.get("current_title", "software engineer")
+            resume = gs.pick_resume(job_title) if wants_resume else None
 
             await asyncio.sleep(random.uniform(REPLY_DELAY_MIN, REPLY_DELAY_MAX))
 

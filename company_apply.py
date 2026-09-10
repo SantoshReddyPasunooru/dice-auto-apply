@@ -862,12 +862,10 @@ _RESUME_TEXT_CACHE: dict[Path, str] = {}
 
 
 def get_resume(profile: dict, email: str, job_title: str = "",
-               jd_text: str = "", company: str = "") -> Optional[Path]:
+               company: str = "") -> Optional[Path]:
     """
-    Pick the best-matching DOCX resume for the job and tailor it to the JD.
+    Pick the best-matching resume for the job title.
     Scoring uses file content (2×) + filename (1×) against job title keywords.
-    If a DOCX is selected and jd_text is provided, the resume is tailored in-place
-    (cached copy) — the master file is never modified.
     Falls back to filename scoring, then default, then first file.
     """
     if not RESUMES_JSON.exists():
@@ -920,17 +918,6 @@ def get_resume(profile: dict, email: str, job_title: str = "",
                 best_score, best_path = score, p
 
         best = best_path if best_score > 0 else (default_path or all_resumes[0])
-
-        # Tailor the DOCX to the JD if possible
-        resume_folder = Path(folder).expanduser() if folder else None
-        if best and best.suffix.lower() == ".docx" and (jd_text or job_title):
-            try:
-                from resume_tailor import tailor_resume
-                context = jd_text or f"{job_title} {company}"
-                return tailor_resume(best, context, output_dir=resume_folder)
-            except Exception as e:
-                print(f"  [Tailor] Error: {e} — using untailored resume")
-
         return best
     except Exception:
         return None

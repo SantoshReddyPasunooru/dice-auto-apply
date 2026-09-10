@@ -131,8 +131,18 @@ class GmailSender:
 
                 if not creds or not creds.valid:
                     if creds and creds.expired and creds.refresh_token:
-                        creds.refresh(Request())
-                    else:
+                        try:
+                            creds.refresh(Request())
+                        except Exception as ref_err:
+                            # Stale token (scope change, revoked, invalid_grant) —
+                            # delete it and fall through to full OAuth re-auth below.
+                            print(f"  [Gmail] Token refresh failed: {ref_err}")
+                            print(f"  [Gmail] Deleting stale token — re-authorizing...")
+                            if self.token_path and self.token_path.exists():
+                                self.token_path.unlink(missing_ok=True)
+                            creds = None
+
+                    if not creds or not creds.valid:
                         # Print clearly which account to choose in the browser
                         print(f"\n  ┌─ Gmail OAuth for: {self.sender_email}")
                         print(f"  │  IMPORTANT: sign in as  >>>  {self.sender_email}  <<<")
@@ -328,6 +338,112 @@ to discuss the role or my background further.</p>
             print(f"      → [Gmail] cold email error: {e}")
             return False
 
+    def fetch_verification_code(self, max_age_seconds: int = 120,
+                               to_email: str = "") -> str | None:
+        """
+        Search recent Gmail inbox for an application email-verification code.
+        Supports Greenhouse (6-digit numeric) and Stripe (8-char alphanumeric).
+        Does NOT restrict sender domain — Stripe sends from stripe.com,
+        Greenhouse from greenhouse.io; both are covered by the subject filter.
+        """
+        import time
+        try:
+            svc = self.get_service()
+            if not svc:
+                return None
+
+            # Broad subject filter — no from: restriction so Stripe emails are included
+            q = (
+                "(subject:verification OR subject:code OR subject:confirm "
+                "OR subject:security OR subject:\"your application\") "
+                "newer_than:1d"
+            )
+            if to_email:
+                q += f" to:{to_email}"
+            result = svc.users().messages().list(
+                userId="me", q=q, maxResults=5
+            ).execute()
+
+            cutoff_ms = (time.time() - max_age_seconds) * 1000
+
+            for ref in result.get("messages", []):
+                # Quick freshness check on metadata before fetching the full body
+                meta = svc.users().messages().get(
+                    userId="me", id=ref["id"], format="metadata"
+                ).execute()
+                if int(meta.get("internalDate", 0)) < cutoff_ms:
+                    continue
+
+                # Check snippet first — avoids a full fetch if snippet has the code
+                snippet = meta.get("snippet", "")
+                code = self._extract_code(snippet)
+                if code:
+                    return code
+
+                # Full body fetch for the most recent matching message
+                msg  = svc.users().messages().get(
+                    userId="me", id=ref["id"], format="full"
+                ).execute()
+                body = self._extract_msg_body(msg)
+                code = self._extract_code(body + "\n" + snippet)
+                if code:
+                    return code
+
+                break  # only check the most recent qualifying message
+
+        except Exception as e:
+            print(f"  [Gmail] fetch_verification_code error: {e}", flush=True)
+        return None
+
+    @staticmethod
+    def _extract_code(text: str) -> str | None:
+        """Extract an 8-char or 6-digit verification code from email text/snippet."""
+        # Greenhouse pattern: "application: NakeSwk3" (mixed-case 8-char)
+        m = re.search(r'application[:\s]+([A-Za-z0-9]{8})\b', text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # Generic "code: XXXXXXXX" (mixed or uppercase, 8-char)
+        m = re.search(r'\bcode[:\s]+([A-Za-z0-9]{8})\b', text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # Uppercase-only 8-char fallback
+        m = re.search(r'\b([A-Z][A-Z0-9]{7}|[A-Z0-9]{7}[A-Z])\b', text)
+        if m:
+            return m.group(1)
+        # 6-digit numeric
+        codes = re.findall(r'\b(\d{6})\b', text)
+        if codes:
+            return codes[0]
+        return None
+
+    @staticmethod
+    def _extract_msg_body(msg: dict) -> str:
+        """Decode the plain-text body from a Gmail API message dict."""
+        def _decode(part: dict) -> str:
+            data = part.get("body", {}).get("data", "")
+            if not data:
+                return ""
+            return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="ignore")
+
+        payload = msg.get("payload", {})
+        if payload.get("mimeType") == "text/plain":
+            return _decode(payload)
+
+        for part in payload.get("parts", []):
+            if part.get("mimeType") == "text/plain":
+                return _decode(part)
+            for sub in part.get("parts", []):
+                if sub.get("mimeType") == "text/plain":
+                    return _decode(sub)
+
+        # Fallback: join all decodable parts
+        texts = []
+        for part in payload.get("parts", []):
+            t = _decode(part)
+            if t:
+                texts.append(t)
+        return "\n".join(texts) or msg.get("snippet", "")
+
     def check_inbox_replies(self) -> list[dict]:
         replies = []
         if not self.sent_emails:
@@ -409,6 +525,11 @@ def send_cold_email(to: str, subject: str, body: str,
                     resume: "Path | None", sender_email: str,
                     source: str = "linkedin") -> bool:
     return _default.send_cold_email(to, subject, body, resume, source)
+
+
+def fetch_verification_code(max_age_seconds: int = 120,
+                            to_email: str = "") -> str | None:
+    return _default.fetch_verification_code(max_age_seconds, to_email=to_email)
 
 
 def check_inbox_replies() -> list[dict]:

@@ -1,0 +1,46 @@
+{
+  "yagneshreddypasunooru@gmail.com": {
+    "sender_email": "yagneshreddypasunooru@gmail.com",
+    "search_keywords": [
+      "OPT",
+      "W2",
+      "Java"
+    ],
+    "job_types": [
+      "OPT",
+      "W2",
+      "C2C"
+    ],
+    "target_roles": [
+      "Java"
+    ],
+    "date_filter": "past-week",
+    "max_posts": 1000,
+    "max_emails": 1000,
+    "delay_min": 6.0,
+    "delay_max": 14.0,
+    "updated_at": "2026-09-03T15:20:48"
+  },
+  "santoshpasunoorureddy@gmail.com": {
+    "sender_email": "santoshpasunoorureddy@gmail.com",
+    "search_keywords": [
+      "OPT",
+      "W2",
+      "gen",
+      "ai"
+    ],
+    "job_types": [
+      "OPT",
+      "W2"
+    ],
+    "target_roles": [
+      "ai"
+    ],
+    "date_filter": "past-week",
+    "max_posts": 1000,
+    "max_emails": 1000,
+    "delay_min": 6.0,
+    "delay_max": 14.0,
+    "updated_at": "2026-09-03T15:21:32"
+  }
+}

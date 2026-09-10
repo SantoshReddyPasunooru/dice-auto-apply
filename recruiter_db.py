@@ -152,7 +152,7 @@ class RecruiterDB:
         with self._lock:
             if email in self._db:
                 rec = self._db[email]
-                if name and not rec.get("name"):
+                if name:
                     rec["name"] = name
                 if company and not rec.get("company"):
                     rec["company"] = company
@@ -186,7 +186,8 @@ class RecruiterDB:
             self._save_locked()
 
     def get(self, email: str) -> dict | None:
-        return self._db.get(email.strip().lower())
+        rec = self._db.get(email.strip().lower())
+        return dict(rec) if rec is not None else None
 
     def count(self) -> int:
         return len(self._db)

@@ -1,0 +1,427 @@
+{
+  "_note": "Add companies with: python company_apply.py --add | Verify slugs at boards.greenhouse.io/{slug} or jobs.lever.co/{slug}",
+  "anthropic": {
+    "name": "Anthropic",
+    "ats": "greenhouse",
+    "slug": "anthropic",
+    "careers_url": "https://boards.greenhouse.io/anthropic"
+  },
+  "figma": {
+    "name": "Figma",
+    "ats": "greenhouse",
+    "slug": "figma",
+    "careers_url": "https://boards.greenhouse.io/figma"
+  },
+  "databricks": {
+    "name": "Databricks",
+    "ats": "greenhouse",
+    "slug": "databricks",
+    "careers_url": "https://boards.greenhouse.io/databricks"
+  },
+  "together_ai": {
+    "name": "Together AI",
+    "ats": "greenhouse",
+    "slug": "togetherai",
+    "careers_url": "https://boards.greenhouse.io/togetherai"
+  },
+  "scale_ai": {
+    "name": "Scale AI",
+    "ats": "greenhouse",
+    "slug": "scaleai",
+    "careers_url": "https://boards.greenhouse.io/scaleai"
+  },
+  "stripe": {
+    "name": "Stripe",
+    "ats": "stripe",
+    "slug": "stripe",
+    "careers_url": "https://stripe.com/careers/search"
+  },
+  "cloudflare": {
+    "name": "Cloudflare",
+    "ats": "greenhouse",
+    "slug": "cloudflare",
+    "careers_url": "https://boards.greenhouse.io/cloudflare"
+  },
+  "mongodb": {
+    "name": "MongoDB",
+    "ats": "greenhouse",
+    "slug": "mongodb",
+    "careers_url": "https://boards.greenhouse.io/mongodb"
+  },
+  "elastic": {
+    "name": "Elastic",
+    "ats": "greenhouse",
+    "slug": "elastic",
+    "careers_url": "https://boards.greenhouse.io/elastic"
+  },
+  "datadog": {
+    "name": "Datadog",
+    "ats": "greenhouse",
+    "slug": "datadog",
+    "careers_url": "https://boards.greenhouse.io/datadog"
+  },
+  "vercel": {
+    "name": "Vercel",
+    "ats": "greenhouse",
+    "slug": "vercel",
+    "careers_url": "https://boards.greenhouse.io/vercel"
+  },
+  "reddit": {
+    "name": "Reddit",
+    "ats": "greenhouse",
+    "slug": "reddit",
+    "careers_url": "https://boards.greenhouse.io/reddit"
+  },
+  "airbnb": {
+    "name": "Airbnb",
+    "ats": "greenhouse",
+    "slug": "airbnb",
+    "careers_url": "https://boards.greenhouse.io/airbnb"
+  },
+  "deepmind": {
+    "name": "DeepMind",
+    "ats": "greenhouse",
+    "slug": "deepmind",
+    "careers_url": "https://boards.greenhouse.io/deepmind"
+  },
+  "twilio": {
+    "name": "Twilio",
+    "ats": "greenhouse",
+    "slug": "twilio",
+    "careers_url": "https://boards.greenhouse.io/twilio"
+  },
+  "discord": {
+    "name": "Discord",
+    "ats": "greenhouse",
+    "slug": "discord",
+    "careers_url": "https://boards.greenhouse.io/discord"
+  },
+  "duolingo": {
+    "name": "Duolingo",
+    "ats": "greenhouse",
+    "slug": "duolingo",
+    "careers_url": "https://boards.greenhouse.io/duolingo"
+  },
+  "brex": {
+    "name": "Brex",
+    "ats": "greenhouse",
+    "slug": "brex",
+    "careers_url": "https://boards.greenhouse.io/brex"
+  },
+  "pagerduty": {
+    "name": "PagerDuty",
+    "ats": "greenhouse",
+    "slug": "pagerduty",
+    "careers_url": "https://boards.greenhouse.io/pagerduty"
+  },
+  "asana": {
+    "name": "Asana",
+    "ats": "greenhouse",
+    "slug": "asana",
+    "careers_url": "https://boards.greenhouse.io/asana"
+  },
+  "hubspot": {
+    "name": "HubSpot",
+    "ats": "greenhouse",
+    "slug": "hubspot",
+    "careers_url": "https://boards.greenhouse.io/hubspot"
+  },
+  "gitlab": {
+    "name": "GitLab",
+    "ats": "greenhouse",
+    "slug": "gitlab",
+    "careers_url": "https://boards.greenhouse.io/gitlab"
+  },
+  "checkr": {
+    "name": "Checkr",
+    "ats": "greenhouse",
+    "slug": "checkr",
+    "careers_url": "https://boards.greenhouse.io/checkr"
+  },
+  "lyft": {
+    "name": "Lyft",
+    "ats": "greenhouse",
+    "slug": "lyft",
+    "careers_url": "https://boards.greenhouse.io/lyft"
+  },
+  "instacart": {
+    "name": "Instacart",
+    "ats": "greenhouse",
+    "slug": "instacart",
+    "careers_url": "https://boards.greenhouse.io/instacart"
+  },
+  "airtable": {
+    "name": "Airtable",
+    "ats": "greenhouse",
+    "slug": "airtable",
+    "careers_url": "https://boards.greenhouse.io/airtable"
+  },
+  "robinhood": {
+    "name": "Robinhood",
+    "ats": "greenhouse",
+    "slug": "robinhood",
+    "careers_url": "https://boards.greenhouse.io/robinhood"
+  },
+  "coreweave": {
+    "name": "CoreWeave",
+    "ats": "greenhouse",
+    "slug": "coreweave",
+    "careers_url": "https://boards.greenhouse.io/coreweave"
+  },
+  "gusto": {
+    "name": "Gusto",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/gusto",
+    "slug": "gusto"
+  },
+  "intercom": {
+    "name": "Intercom",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/intercom",
+    "slug": "intercom"
+  },
+  "amplitude": {
+    "name": "Amplitude",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/amplitude",
+    "slug": "amplitude"
+  },
+  "mixpanel": {
+    "name": "Mixpanel",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/mixpanel",
+    "slug": "mixpanel"
+  },
+  "carta": {
+    "name": "Carta",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/carta",
+    "slug": "carta"
+  },
+  "flexport": {
+    "name": "Flexport",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/flexport",
+    "slug": "flexport"
+  },
+  "faire": {
+    "name": "Faire",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/faire",
+    "slug": "faire"
+  },
+  "new_relic": {
+    "name": "New Relic",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/newrelic",
+    "slug": "newrelic"
+  },
+  "samsara": {
+    "name": "Samsara",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/samsara",
+    "slug": "samsara"
+  },
+  "lattice": {
+    "name": "Lattice",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/lattice",
+    "slug": "lattice"
+  },
+  "attentive": {
+    "name": "Attentive",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/attentive",
+    "slug": "attentive"
+  },
+  "klaviyo": {
+    "name": "Klaviyo",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/klaviyo",
+    "slug": "klaviyo"
+  },
+  "salesloft": {
+    "name": "Salesloft",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/salesloft",
+    "slug": "salesloft"
+  },
+  "zoominfo": {
+    "name": "ZoomInfo",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/zoominfo",
+    "slug": "zoominfo"
+  },
+  "fivetran": {
+    "name": "Fivetran",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/fivetran",
+    "slug": "fivetran"
+  },
+  "sigma": {
+    "name": "Sigma",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/sigmacomputing",
+    "slug": "sigmacomputing"
+  },
+  "singlestore": {
+    "name": "SingleStore",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/singlestore",
+    "slug": "singlestore"
+  },
+  "planetscale": {
+    "name": "PlanetScale",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/planetscale",
+    "slug": "planetscale"
+  },
+  "fastly": {
+    "name": "Fastly",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/fastly",
+    "slug": "fastly"
+  },
+  "launchdarkly": {
+    "name": "LaunchDarkly",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/launchdarkly",
+    "slug": "launchdarkly"
+  },
+  "contentful": {
+    "name": "Contentful",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/contentful",
+    "slug": "contentful"
+  },
+  "algolia": {
+    "name": "Algolia",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/algolia",
+    "slug": "algolia"
+  },
+  "assemblyai": {
+    "name": "AssemblyAI",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/assemblyai",
+    "slug": "assemblyai"
+  },
+  "smartsheet": {
+    "name": "Smartsheet",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/smartsheet",
+    "slug": "smartsheet"
+  },
+  "wrike": {
+    "name": "Wrike",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/wrike",
+    "slug": "wrike"
+  },
+  "workato": {
+    "name": "Workato",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/workato",
+    "slug": "workato"
+  },
+  "remote": {
+    "name": "Remote",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/remote",
+    "slug": "remote"
+  },
+  "mercury": {
+    "name": "Mercury",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/mercury",
+    "slug": "mercury"
+  },
+  "labelbox": {
+    "name": "Labelbox",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/labelbox",
+    "slug": "labelbox"
+  },
+  "iterable": {
+    "name": "Iterable",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/iterable",
+    "slug": "iterable"
+  },
+  "braze": {
+    "name": "Braze",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/braze",
+    "slug": "braze"
+  },
+  "customer.io": {
+    "name": "Customer.io",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/customerio",
+    "slug": "customerio"
+  },
+  "circleci": {
+    "name": "CircleCI",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/circleci",
+    "slug": "circleci"
+  },
+  "buildkite": {
+    "name": "Buildkite",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/buildkite",
+    "slug": "buildkite"
+  },
+  "sumo_logic": {
+    "name": "Sumo Logic",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/sumologic",
+    "slug": "sumologic"
+  },
+  "apollo": {
+    "name": "Apollo",
+    "ats": "greenhouse",
+    "url": "https://boards.greenhouse.io/apolloio",
+    "slug": "apolloio"
+  },
+  "adobe": {
+    "name": "Adobe",
+    "ats": "workday",
+    "tenant": "adobe",
+    "shard": 5,
+    "portal": "external_experienced",
+    "careers_url": "https://adobe.wd5.myworkdayjobs.com/en-US/external_experienced"
+  },
+  "cisco": {
+    "name": "Cisco",
+    "ats": "workday",
+    "tenant": "cisco",
+    "shard": 5,
+    "portal": "Cisco_Careers",
+    "careers_url": "https://cisco.wd5.myworkdayjobs.com/en-US/Cisco_Careers"
+  },
+  "intel": {
+    "name": "Intel",
+    "ats": "workday",
+    "tenant": "intel",
+    "shard": 1,
+    "portal": "External",
+    "careers_url": "https://intel.wd1.myworkdayjobs.com/en-US/External"
+  },
+  "microsoft": {
+    "name": "Microsoft",
+    "ats": "workday",
+    "tenant": "microsoftcareers",
+    "shard": 1,
+    "portal": "External",
+    "careers_url": "https://microsoftcareers.wd1.myworkdayjobs.com/en-US/External"
+  },
+  "salesforce": {
+    "name": "Salesforce",
+    "ats": "workday",
+    "tenant": "salesforce",
+    "shard": 5,
+    "portal": "External_Career_Site",
+    "careers_url": "https://salesforce.wd5.myworkdayjobs.com/en-US/External_Career_Site"
+  }
+}

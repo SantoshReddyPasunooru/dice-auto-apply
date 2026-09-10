@@ -43,8 +43,7 @@ RESUMES_JSON  = _HERE / "resumes.json"
 APPLIED_CSV   = _HERE / "applied_jobs.csv"
 OLLAMA_MODEL  = "gemma2:2b"
 
-POLL_MIN = 10    # seconds between inbox polls
-POLL_MAX = 10
+POLL_INTERVAL   = 1      # seconds between history polls (incremental — cheap)
 REPLY_DELAY_MIN = 15   # human-like pause before sending reply
 REPLY_DELAY_MAX = 45
 
@@ -84,6 +83,59 @@ _stats:     dict[str, ProfileStats] = {}
 _activity:  deque                   = deque(maxlen=100)
 _lock       = asyncio.Lock()
 _start_time = datetime.now()
+
+# ── Verification-code pub/sub bus ──────────────────────────────────────────────
+# keyed by monitored email; company_apply.py can subscribe via subscribe_verification_code()
+_verification_bus: dict[str, asyncio.Queue] = {}
+
+# ── Cached authenticated Gmail services (email → service object) ───────────────
+_services: dict[str, object] = {}
+
+
+def get_service(email: str):
+    """Return the cached Gmail service for *email*, or None if monitor hasn't authed it yet."""
+    return _services.get(email)
+
+
+async def subscribe_verification_code(email: str, timeout: float = 90.0) -> str | None:
+    """
+    Wait up to *timeout* seconds for a verification code to arrive for *email*.
+    Returns the code string, or None on timeout.
+    Useful when running company_apply.py and gmail_monitor in the same process.
+    """
+    if email not in _verification_bus:
+        _verification_bus[email] = asyncio.Queue()
+    try:
+        return await asyncio.wait_for(_verification_bus[email].get(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return None
+
+
+def _detect_code_in_text(text: str) -> str | None:
+    """Extract a verification/security code from email text. Returns None if not a code email."""
+    lower = text.lower()
+    if not any(k in lower for k in [
+        "verification", "verify", "confirm", "security code",
+        "one-time", "passcode", "your code", "enter the code", "access code",
+    ]):
+        return None
+    # Greenhouse: "application: NakeSwk3" (mixed-case 8-char)
+    m = re.search(r'application[:\s]+([A-Za-z0-9]{8})\b', text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # Generic "code: XXXXXXXX" (mixed or uppercase)
+    m = re.search(r'\bcode[:\s]+([A-Za-z0-9]{8})\b', text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # Uppercase-only 8-char fallback
+    m = re.search(r'\b([A-Z][A-Z0-9]{7}|[A-Z0-9]{7}[A-Z])\b', text)
+    if m:
+        return m.group(1)
+    # 6-digit numeric
+    codes = re.findall(r'\b(\d{6})\b', text)
+    if codes:
+        return codes[0]
+    return None
 
 
 def _log(tag: str, icon: str, action: str, detail: str = ""):
@@ -416,13 +468,6 @@ def _classify_sync(from_raw: str, subject: str, body: str) -> dict:
                 "is_rtr": False, "is_offer": False}
 
 
-# Regex that matches placeholder names Ollama sometimes emits literally
-_PLACEHOLDER_RE = re.compile(
-    r"\[(?:Recruiter\s*)?(?:Name|Hiring\s*Manager|recruiter\s*name|Your\s*Name|First\s*Name)\]",
-    re.IGNORECASE,
-)
-
-
 # ── Ollama — reply generator ──────────────────────────────────────────────────
 
 def _generate_reply_sync(recruiter_body: str, subject: str,
@@ -480,11 +525,6 @@ def _generate_reply_sync(recruiter_body: str, subject: str,
                            messages=[{"role": "user", "content": prompt}])
         body = resp.message.content.strip()
         body = re.sub(r"(?i)^subject\s*:.*\n?", "", body).strip()
-        # Replace any [Recruiter Name] / [Name] / [Hiring Manager] placeholders
-        if recruiter_first_name:
-            body = _PLACEHOLDER_RE.sub(recruiter_first_name, body)
-        else:
-            body = _PLACEHOLDER_RE.sub("", body).strip()
         # Ensure the greeting is correct even if model ignored the instruction
         if not body.startswith("Hi"):
             body = f"{greeting}\n\n{body}"
@@ -517,6 +557,144 @@ def _generate_reply_sync(recruiter_body: str, subject: str,
 
 # ── Core monitor loop (one per profile) ──────────────────────────────────────
 
+async def _handle_new_message(
+    email: str, svc, gs: gmail_sender.GmailSender,
+    profile_data: dict, stats: "ProfileStats", tag: str,
+    msg_id: str, processed_ids: set,
+):
+    """
+    Classify and act on a single new message.
+    Checks for verification codes first (pushes to bus), then handles recruiter emails.
+    """
+    if msg_id in processed_ids:
+        return
+    processed_ids.add(msg_id)
+
+    # Cheap metadata fetch for both verification-code detection and junk filter
+    try:
+        meta = await asyncio.to_thread(
+            lambda mid=msg_id: svc.users().messages().get(
+                userId="me", id=mid, format="metadata",
+                metadataHeaders=["Subject", "From", "To"],
+            ).execute()
+        )
+    except Exception:
+        return
+
+    snippet = meta.get("snippet", "")
+    headers = {h["name"]: h["value"] for h in meta["payload"]["headers"]}
+    subject_quick = headers.get("Subject", "")
+    from_raw_quick = headers.get("From", "")
+    m = re.search(r"[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}", from_raw_quick)
+    from_email_quick = m.group().lower() if m else from_raw_quick.lower()
+
+    # Check for verification code BEFORE the junk filter
+    # (Stripe/Greenhouse may be in the junk sender list but we still need their codes)
+    code = _detect_code_in_text(f"{subject_quick} {snippet}")
+    if code:
+        if email not in _verification_bus:
+            _verification_bus[email] = asyncio.Queue()
+        await _verification_bus[email].put(code)
+        _log(tag, "🔑", "Verification code → bus", f"{code[:4]}... | {subject_quick[:30]}")
+        return
+
+    # Silently skip junk senders (no archive, no log, no extra API calls)
+    if _is_junk_sender(from_email_quick):
+        return
+
+    # Full message fetch for recruiter classification
+    try:
+        from_raw, from_email, subject, body, thread_id, tab = \
+            await asyncio.to_thread(_get_full_message, svc, msg_id)
+    except Exception:
+        return
+
+    clf      = await asyncio.to_thread(_classify_sync, from_raw, subject, body)
+    category = clf["category"]
+    tab_label = f"[{tab}]" if tab != "inbox" else ""
+
+    async with _lock:
+        now_str = datetime.now().strftime("%H:%M:%S")
+        stats.last_from       = from_email[:30]
+        stats.last_subject    = subject[:40]
+        stats.last_action_time = now_str
+        sender_short          = email.split("@")[0]
+
+        await asyncio.to_thread(
+            recruiter_db.upsert,
+            from_email, from_raw, "", subject, f"gmail_{tab}", category.lower(),
+        )
+
+        if category == "JUNK":
+            await asyncio.to_thread(_archive,     svc, msg_id)
+            await asyncio.to_thread(_mark_read,   svc, msg_id)
+            await asyncio.to_thread(_apply_label, svc, msg_id, "outreach/junk")
+            stats.archived   += 1
+            stats.last_action = "Archived (junk)"
+            _log(tag, "🗑", f"Archived {tab_label}",
+                 f"{from_email} → {sender_short} [{subject[:30]}]")
+        else:
+            stats.replies_received += 1
+            if clf.get("is_rtr") or category == "RTR":
+                stats.rtrs_received += 1
+            if clf.get("is_offer"):
+                stats.offers += 1
+
+            _log(tag, "📨", f"Received [{category}] {tab_label}",
+                 f"{from_email} → {sender_short} | {subject[:35]}")
+
+            recruiter_first = _extract_first_name(from_raw)
+            reply_body = await asyncio.to_thread(
+                _generate_reply_sync, body, subject, profile_data, clf, recruiter_first
+            )
+            wants_resume = clf.get("wants_resume", False)
+            resume = gs.pick_resume("software engineer") if wants_resume else None
+
+            await asyncio.sleep(random.uniform(REPLY_DELAY_MIN, REPLY_DELAY_MAX))
+
+            ok = await asyncio.to_thread(
+                _send_thread_reply, svc, email, from_raw, subject, reply_body, thread_id, resume
+            )
+
+            if ok:
+                await asyncio.to_thread(_mark_read, svc, msg_id)
+                stats.replies_sent += 1
+
+                if category == "INTERVIEW" or clf.get("is_interview"):
+                    await asyncio.to_thread(_apply_label, svc, msg_id, "outreach/interview")
+                    stats.interviews  += 1
+                    stats.last_action  = "Interview reply sent"
+                    _log(tag, "🎯", f"Interview reply sent {tab_label}",
+                         f"{sender_short} → {from_email}")
+                    await asyncio.to_thread(
+                        recruiter_db.upsert, from_email, from_raw, "", subject,
+                        f"gmail_{tab}", "interview",
+                    )
+                elif category == "RTR" or clf.get("is_rtr"):
+                    await asyncio.to_thread(_apply_label, svc, msg_id, "outreach/rtr")
+                    stats.rtrs_replied += 1
+                    stats.last_action   = "RTR authorized"
+                    _log(tag, "📋", f"RTR authorized {tab_label}",
+                         f"{sender_short} → {from_email}")
+                    await asyncio.to_thread(
+                        recruiter_db.upsert, from_email, from_raw, "", subject,
+                        f"gmail_{tab}", "rtr",
+                    )
+                else:
+                    await asyncio.to_thread(_apply_label, svc, msg_id, "outreach/active")
+                    stats.last_action = "Replied"
+                    _log(tag, "✉", f"Reply sent {tab_label}",
+                         f"{sender_short} → {from_email} | {subject[:30]}")
+                    await asyncio.to_thread(
+                        recruiter_db.upsert, from_email, from_raw, "", subject,
+                        f"gmail_{tab}", "replied",
+                    )
+            else:
+                stats.errors     += 1
+                stats.last_action = "Reply failed"
+                _log(tag, "✗", "Reply failed", from_email)
+
+
 async def _monitor_profile(email: str, profile_data: dict,
                            gs: gmail_sender.GmailSender):
     tag   = email.split("@")[0][:12]
@@ -525,13 +703,14 @@ async def _monitor_profile(email: str, profile_data: dict,
     stats.uptime_start = datetime.now().strftime("%H:%M:%S")
 
     processed_ids: set[str] = set()
-    _replied_at:   dict[str, datetime] = {}   # {from_email: last_reply_time}
+    history_id:    str | None = None
+    svc = None
 
     while True:
-        try:
-            stats.status     = "checking..."
+        # ── Authenticate ─────────────────────────────────────────────────────
+        if svc is None:
+            stats.status     = "authenticating..."
             stats.last_check = datetime.now().strftime("%H:%M:%S")
-
             svc = await asyncio.to_thread(gs.get_service)
             if not svc:
                 stats.errors += 1
@@ -540,162 +719,82 @@ async def _monitor_profile(email: str, profile_data: dict,
                     stats.status = f"auth error — retry in {i}s"
                     await asyncio.sleep(1)
                 continue
+            _services[email] = svc  # expose for external consumers
 
-            messages = await asyncio.to_thread(_list_unread, svc)
-            new_msgs = [r for r in messages if r["id"] not in processed_ids]
-            _log(tag, "🔍", "Polled inbox+tabs",
-                 f"{len(messages)} unread (7d)  |  {len(new_msgs)} new")
+        # ── Initial full scan (runs once to set history baseline) ────────────
+        if history_id is None:
+            stats.status = "initial scan..."
+            try:
+                profile_info = await asyncio.to_thread(
+                    lambda: svc.users().getProfile(userId="me").execute()
+                )
+                history_id = str(profile_info["historyId"])
+            except Exception as e:
+                _log(tag, "✗", "getProfile failed", str(e)[:60])
+                svc = None
+                await asyncio.sleep(10)
+                continue
 
-            for ref in new_msgs:
-                msg_id = ref["id"]
-                processed_ids.add(msg_id)
+            # Process existing unreads for recruiter monitoring (not for code detection)
+            try:
+                messages = await asyncio.to_thread(_list_unread, svc)
+                new_msgs = [r for r in messages if r["id"] not in processed_ids]
+                _log(tag, "🔍", "Initial scan complete",
+                     f"{len(messages)} unread (7d) | {len(new_msgs)} new | historyId={history_id}")
+                for ref in new_msgs:
+                    await _handle_new_message(
+                        email, svc, gs, profile_data, stats, tag,
+                        ref["id"], processed_ids,
+                    )
+            except Exception as e:
+                _log(tag, "✗", "Initial scan error", str(e)[:60])
 
-                # Cheap sender-only check first — skip junk with zero extra API calls
-                from_raw_quick, from_email_quick = \
-                    await asyncio.to_thread(_get_sender_email, svc, msg_id)
-                if _is_junk_sender(from_email_quick):
-                    continue   # silently ignore — no archive, no log, no wasted time
+            stats.status = "live (1s polling)"
+            stats.last_check = datetime.now().strftime("%H:%M:%S")
+            continue  # immediately start the history loop
 
-                # Legitimate sender — fetch full message and process
-                from_raw, from_email, subject, body, thread_id, tab = \
-                    await asyncio.to_thread(_get_full_message, svc, msg_id)
+        # ── History-based 1-second incremental poll ───────────────────────────
+        await asyncio.sleep(POLL_INTERVAL)
+        stats.last_check = datetime.now().strftime("%H:%M:%S")
 
-                clf      = await asyncio.to_thread(_classify_sync, from_raw, subject, body)
-                category = clf["category"]
+        try:
+            history = await asyncio.to_thread(
+                lambda hid=history_id: svc.users().history().list(
+                    userId="me",
+                    startHistoryId=hid,
+                    historyTypes=["messageAdded"],
+                    maxResults=50,
+                ).execute()
+            )
+            new_hid = history.get("historyId", history_id)
+            if new_hid != history_id:
+                history_id = new_hid
+                stats.status = "live (1s polling)"
 
-                tab_label = f"[{tab}]" if tab != "inbox" else ""
-
-                async with _lock:
-                    now_str = datetime.now().strftime("%H:%M:%S")
-                    stats.last_from    = from_email[:30]
-                    stats.last_subject = subject[:40]
-                    stats.last_action_time = now_str
-
-                    # Always record the recruiter in the DB regardless of category
-                    await asyncio.to_thread(
-                        recruiter_db.upsert,
-                        from_email,
-                        from_raw,                  # full "Name <email>" as name
-                        "",                        # company — auto-filled from domain in DB
-                        subject,                   # use subject as title hint
-                        f"gmail_{tab}",            # source: gmail_inbox / gmail_promotions / etc.
-                        category.lower(),          # status: junk / interview / rtr / reply_needed
+            for record in history.get("history", []):
+                for msg_ref in record.get("messagesAdded", []):
+                    await _handle_new_message(
+                        email, svc, gs, profile_data, stats, tag,
+                        msg_ref["message"]["id"], processed_ids,
                     )
 
-                    sender_short = email.split("@")[0]   # e.g. yagneshreddypasunooru
-
-                    if category == "JUNK":
-                        await asyncio.to_thread(_archive,     svc, msg_id)
-                        await asyncio.to_thread(_mark_read,   svc, msg_id)
-                        await asyncio.to_thread(_apply_label, svc, msg_id, "outreach/junk")
-                        stats.archived    += 1
-                        stats.last_action  = "Archived (junk)"
-                        _log(tag, "🗑",
-                             f"Archived {tab_label}",
-                             f"{from_email} → {sender_short} [{subject[:30]}]")
-
-                    else:
-                        stats.replies_received += 1
-
-                        if clf.get("is_rtr") or category == "RTR":
-                            stats.rtrs_received += 1
-
-                        if clf.get("is_offer"):
-                            stats.offers += 1
-
-                        _log(tag, "📨",
-                             f"Received [{category}] {tab_label}",
-                             f"{from_email} → {sender_short} | {subject[:35]}")
-
-                        # 1-hour cooldown: skip if we already replied to this sender recently
-                        if from_email in _replied_at:
-                            elapsed = (datetime.now() - _replied_at[from_email]).total_seconds()
-                            if elapsed < 3600:
-                                mins = int(elapsed // 60)
-                                _log(tag, "⏳", "Cooldown — skipping duplicate",
-                                     f"{from_email} replied {mins}m ago")
-                                continue
-
-                        recruiter_first = _extract_first_name(from_raw)
-                        reply_body = await asyncio.to_thread(
-                            _generate_reply_sync, body, subject, profile_data, clf,
-                            recruiter_first
-                        )
-                        wants_resume = clf.get("wants_resume", False)
-                        resume = gs.pick_resume("software engineer") if wants_resume else None
-
-                        await asyncio.sleep(random.uniform(REPLY_DELAY_MIN, REPLY_DELAY_MAX))
-
-                        ok = await asyncio.to_thread(
-                            _send_thread_reply, svc, email,
-                            from_raw, subject, reply_body, thread_id, resume
-                        )
-
-                        if ok:
-                            await asyncio.to_thread(_mark_read, svc, msg_id)
-                            _replied_at[from_email] = datetime.now()
-                            stats.replies_sent += 1
-
-                            if category == "INTERVIEW" or clf.get("is_interview"):
-                                await asyncio.to_thread(
-                                    _apply_label, svc, msg_id, "outreach/interview"
-                                )
-                                stats.interviews  += 1
-                                stats.last_action  = "Interview reply sent"
-                                _log(tag, "🎯",
-                                     f"Interview reply sent {tab_label}",
-                                     f"{sender_short} → {from_email}")
-                                await asyncio.to_thread(
-                                    recruiter_db.upsert, from_email, from_raw, "", subject,
-                                    f"gmail_{tab}", "interview",
-                                )
-
-                            elif category == "RTR" or clf.get("is_rtr"):
-                                await asyncio.to_thread(
-                                    _apply_label, svc, msg_id, "outreach/rtr"
-                                )
-                                stats.rtrs_replied += 1
-                                stats.last_action   = "RTR authorized"
-                                _log(tag, "📋",
-                                     f"RTR authorized {tab_label}",
-                                     f"{sender_short} → {from_email}")
-                                await asyncio.to_thread(
-                                    recruiter_db.upsert, from_email, from_raw, "", subject,
-                                    f"gmail_{tab}", "rtr",
-                                )
-
-                            else:
-                                await asyncio.to_thread(
-                                    _apply_label, svc, msg_id, "outreach/active"
-                                )
-                                stats.last_action = "Replied"
-                                _log(tag, "✉",
-                                     f"Reply sent {tab_label}",
-                                     f"{sender_short} → {from_email} | {subject[:30]}")
-                                await asyncio.to_thread(
-                                    recruiter_db.upsert, from_email, from_raw, "", subject,
-                                    f"gmail_{tab}", "replied",
-                                )
-                        else:
-                            stats.errors      += 1
-                            stats.last_action  = "Reply failed"
-                            _log(tag, "✗", "Reply failed", from_email)
-
-        except Exception as e:
-            stats.errors     += 1
-            stats.status      = "error"
-            stats.last_action = f"Error: {str(e)[:40]}"
-            _log(tag, "✗", "Error", str(e)[:60])
-
-        delay   = random.uniform(POLL_MIN, POLL_MAX)
-        nxt     = (datetime.now() + timedelta(seconds=delay)).strftime("%H:%M:%S")
-        stats.next_check = nxt
-        stats.last_check = datetime.now().strftime("%H:%M:%S")
-        remaining = int(delay)
-        while remaining > 0:
-            stats.status = f"next poll in {remaining}s"
-            await asyncio.sleep(1)
-            remaining -= 1
+        except Exception as exc:
+            err = str(exc)
+            if "Invalid historyId" in err or "404" in err:
+                _log(tag, "↺", "historyId expired — re-syncing", "")
+                history_id = None   # triggers full re-scan on next iteration
+            elif "rateLimitExceeded" in err or "429" in err:
+                _log(tag, "⚠", "Rate limit — backing off 30s", "")
+                stats.status = "rate limited"
+                await asyncio.sleep(30)
+            elif "401" in err or "invalid_grant" in err:
+                _log(tag, "✗", "Auth expired — re-authing", "")
+                svc = None
+                history_id = None
+            else:
+                stats.errors     += 1
+                stats.last_action = f"Poll error: {err[:35]}"
+                _log(tag, "✗", "Poll error", err[:60])
 
 
 # ── Rich dashboard ────────────────────────────────────────────────────────────
@@ -783,11 +882,10 @@ def _render_dashboard() -> Layout:
         padding=(0, 1),
     )
     stbl.add_column("Profile",     style="cyan",   no_wrap=True, min_width=14)
-    stbl.add_column("Status",      style="yellow", no_wrap=True, min_width=12)
+    stbl.add_column("Status",      style="yellow", no_wrap=True, min_width=18)
     stbl.add_column("Last From",   style="white",  no_wrap=True, min_width=22)
     stbl.add_column("Last Action", style="white",  no_wrap=True, min_width=22)
     stbl.add_column("Last Check",  style="dim",    no_wrap=True, min_width=8)
-    stbl.add_column("Next Check",  style="dim",    no_wrap=True, min_width=8)
 
     for p in profiles:
         name_cell = p.name or p.email.split("@")[0]
@@ -797,7 +895,6 @@ def _render_dashboard() -> Layout:
             p.last_from    or "[dim]—[/dim]",
             p.last_action  or "[dim]—[/dim]",
             p.last_check   or "[dim]—[/dim]",
-            p.next_check   or "[dim]—[/dim]",
         )
 
     layout["status"].update(Panel(

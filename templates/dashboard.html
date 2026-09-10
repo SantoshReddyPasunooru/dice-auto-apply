@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Dashboard — {{ profile_name }}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--sidebar:#13151f;--card:#1a1d2e;--card2:#1e2235;
+  --border:#2a2d3e;--accent:#6c63ff;--accent2:#4f46e5;
+  --green:#22c55e;--red:#ef4444;--yellow:#f59e0b;--blue:#3b82f6;
+  --text:#e2e8f0;--muted:#6b7280;--mono:'JetBrains Mono','Fira Code',monospace;
+}
+body{display:flex;height:100vh;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:14px;overflow:hidden}
+
+/* ── Sidebar ── */
+.sidebar{width:200px;min-width:200px;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:0}
+.sidebar-header{padding:20px 16px 16px;border-bottom:1px solid var(--border)}
+.sidebar-header .name{font-weight:700;font-size:15px;color:var(--text)}
+.sidebar-header .email{font-size:11px;color:var(--muted);margin-top:2px;word-break:break-all}
+.nav-item{display:flex;align-items:center;gap:10px;padding:11px 16px;cursor:pointer;color:var(--muted);border-left:3px solid transparent;transition:all .15s}
+.nav-item:hover{background:var(--card);color:var(--text)}
+.nav-item.active{background:var(--card);color:var(--accent);border-left-color:var(--accent)}
+.nav-item .icon{font-size:16px;width:20px;text-align:center}
+.nav-item .label{font-size:13px;font-weight:500}
+
+/* ── Main ── */
+.main{flex:1;overflow-y:auto;padding:24px}
+.section{display:none}
+.section.active{display:block}
+
+/* ── Headings ── */
+.page-title{font-size:20px;font-weight:700;margin-bottom:20px;display:flex;align-items:center;gap:10px}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.badge.running{background:rgba(34,197,94,.15);color:var(--green)}
+.badge.stopped{background:rgba(107,114,128,.15);color:var(--muted)}
+.badge.connected{background:rgba(34,197,94,.15);color:var(--green)}
+.badge.disconnected{background:rgba(239,68,68,.15);color:var(--red)}
+.badge.running{background:rgba(34,197,94,.15);color:var(--green)}
+.badge.offline{background:rgba(239,68,68,.15);color:var(--red)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+/* ── Cards ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px}
+.card-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:14px}
+
+/* ── Home grid ── */
+.home-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.home-grid .full{grid-column:1/-1}
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.stat-row:last-child{border-bottom:none}
+.stat-label{color:var(--muted);font-size:13px}
+.stat-val{font-weight:700;font-size:14px}
+.conn-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
+.conn-row:last-child{border-bottom:none}
+.conn-label{font-size:13px}
+.feature-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)}
+.feature-row:last-child{border-bottom:none}
+.feature-name{font-size:13px}
+
+/* ── Activity / error feed ── */
+.feed{max-height:180px;overflow-y:auto}
+.feed-item{display:flex;gap:10px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
+.feed-item:last-child{border-bottom:none}
+.feed-ts{color:var(--muted);white-space:nowrap;font-family:var(--mono)}
+.feed-feat{color:var(--accent);width:90px;flex-shrink:0;font-weight:600}
+.feed-line{color:var(--text);word-break:break-all}
+.feed-line.err{color:var(--red)}
+
+/* ── Feature sections ── */
+.feature-header{display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+.ctrl-row{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent2)}
+.btn-danger{background:var(--red);color:#fff}
+.btn-danger:hover{background:#dc2626}
+.btn-ghost{background:var(--card2);color:var(--text);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--border)}
+.btn-sm{padding:5px 11px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ── Inputs / selects ── */
+input[type=text],input[type=email],input[type=url],input[type=tel],input[type=number],
+select,textarea{
+  background:var(--card2);border:1px solid var(--border);border-radius:7px;
+  color:var(--text);padding:8px 12px;font-size:13px;width:100%;outline:none;
+  font-family:inherit;transition:border-color .15s
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{resize:vertical;min-height:72px}
+select option{background:var(--card2)}
+
+/* ── Log terminal ── */
+.log-panel{background:#0a0b10;border:1px solid var(--border);border-radius:8px;
+  height:380px;overflow-y:auto;padding:12px;font-family:var(--mono);font-size:12px;
+  line-height:1.6;color:#a8b4c8}
+.log-panel .log-line{white-space:pre-wrap;word-break:break-all}
+.log-panel .log-line.err{color:#f87171}
+.log-panel .log-line.ok{color:#86efac}
+.log-panel .log-line.info{color:#93c5fd}
+.log-panel .log-line.meta{color:#6b7280;font-style:italic}
+
+/* ── Profile form ── */
+.profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.profile-grid .full{grid-column:1/-1}
+fieldset{border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:12px;font-weight:600;color:var(--muted)}
+.conn-box{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+.conn-box .conn-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:12px}
+.save-bar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;display:flex;align-items:center;gap:12px}
+.save-msg{font-size:12px;color:var(--green)}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ── Divider ── */
+.divider{height:1px;background:var(--border);margin:16px 0}
+
+/* ── Company select row ── */
+.company-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.company-row select{flex:1;min-width:180px}
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────────────── -->
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <div class="name">{{ profile_name }}</div>
+    <div class="email">{{ profile_email }}</div>
+  </div>
+  <div class="nav-item active" onclick="switchTab('home')">
+    <span class="icon">🏠</span><span class="label">Home</span>
+  </div>
+  <div class="nav-item" onclick="switchTab('gmail_monitor')">
+    <span class="icon">📧</span><span class="label">Gmail Monitor</span>
+  </div>
+  <div class="nav-item" onclick="switchTab('linkedin_outreach')">
+    <span class="icon">💼</span><span class="label">LinkedIn</span>
+  </div>
+  <div class="nav-item" onclick="switchTab('dice_apply')">
+    <span class="icon">🎲</span><span class="label">Dice Apply</span>
+  </div>
+  <div class="nav-item" onclick="switchTab('companies_apply')">
+    <span class="icon">🏢</span><span class="label">Companies</span>
+  </div>
+  <div class="nav-item" onclick="switchTab('profile')">
+    <span class="icon">👤</span><span class="label">Profile</span>
+  </div>
+</nav>
+
+<!-- ── Main ───────────────────────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- HOME -->
+  <div id="sec-home" class="section active">
+    <div class="page-title">🏠 Home</div>
+    <div class="home-grid">
+
+      <!-- Feature Status -->
+      <div class="card">
+        <div class="card-title">Feature Status</div>
+        <div class="feature-row"><span class="feature-name">Gmail Monitor</span><span id="proc-gmail_monitor" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+        <div class="feature-row"><span class="feature-name">LinkedIn Outreach</span><span id="proc-linkedin_outreach" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+        <div class="feature-row"><span class="feature-name">Dice Apply</span><span id="proc-dice_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+        <div class="feature-row"><span class="feature-name">Companies Apply</span><span id="proc-companies_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+      </div>
+
+      <!-- Stats -->
+      <div class="card">
+        <div class="card-title">Stats</div>
+        <div class="stat-row"><span class="stat-label">Dice Applied</span><span id="s-dice_applied" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Companies Applied</span><span id="s-company_applied" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Recruiters Contacted</span><span id="s-recruiters_total" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Recruiter Replies</span><span id="s-recruiters_replied" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Interviews</span><span id="s-interviews" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Dice Errors</span><span id="s-dice_errors" class="stat-val">—</span></div>
+      </div>
+
+      <!-- Connection Health -->
+      <div class="card">
+        <div class="card-title">Connection Health</div>
+        <div class="conn-row">
+          <span class="conn-label">Gmail</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span id="conn-gmail" class="badge disconnected"><span class="dot"></span>Checking</span>
+            <button class="btn btn-ghost btn-sm" onclick="connectGmail()">Connect</button>
+          </div>
+        </div>
+        <div class="conn-row">
+          <span class="conn-label">Dice Session</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span id="conn-dice" class="badge disconnected"><span class="dot"></span>Checking</span>
+          </div>
+        </div>
+        <div class="conn-row">
+          <span class="conn-label">Ollama (LLM)</span>
+          <span id="conn-ollama" class="badge offline"><span class="dot"></span>Checking</span>
+        </div>
+      </div>
+
+      <!-- Error Log -->
+      <div class="card">
+        <div class="card-title">Recent Errors</div>
+        <div class="feed" id="error-feed"><div style="color:var(--muted);font-size:12px">No errors yet</div></div>
+      </div>
+
+      <!-- Activity Feed -->
+      <div class="card full">
+        <div class="card-title">Recent Activity</div>
+        <div class="feed" id="activity-feed"><div style="color:var(--muted);font-size:12px">No activity yet</div></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- GMAIL MONITOR -->
+  <div id="sec-gmail_monitor" class="section">
+    <div class="page-title">📧 Gmail Monitor <span id="badge-gmail_monitor" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="ctrl-row">
+      <button id="btn-gmail_monitor" class="btn btn-primary" onclick="startFeature('gmail_monitor')">▶ Start</button>
+      <button id="stop-gmail_monitor" class="btn btn-danger" onclick="stopFeature('gmail_monitor')" style="display:none">■ Stop</button>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Stats</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        <div class="stat-row"><span class="stat-label">Replies Sent</span><span id="gm-sent" class="stat-val">0</span></div>
+        <div class="stat-row"><span class="stat-label">Received</span><span id="gm-recv" class="stat-val">0</span></div>
+        <div class="stat-row"><span class="stat-label">Interviews</span><span id="gm-int" class="stat-val">0</span></div>
+        <div class="stat-row"><span class="stat-label">Archived</span><span id="gm-arch" class="stat-val">0</span></div>
+      </div>
+    </div>
+    <div class="card-title" style="margin-bottom:8px">Live Log</div>
+    <div class="log-panel" id="log-gmail_monitor"></div>
+  </div>
+
+  <!-- LINKEDIN OUTREACH -->
+  <div id="sec-linkedin_outreach" class="section">
+    <div class="page-title">💼 LinkedIn Outreach <span id="badge-linkedin_outreach" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="ctrl-row">
+      <button id="btn-linkedin_outreach" class="btn btn-primary" onclick="startFeature('linkedin_outreach')">▶ Start</button>
+      <button id="stop-linkedin_outreach" class="btn btn-danger" onclick="stopFeature('linkedin_outreach')" style="display:none">■ Stop</button>
+    </div>
+    <div class="card-title" style="margin-bottom:8px">Live Log</div>
+    <div class="log-panel" id="log-linkedin_outreach"></div>
+  </div>
+
+  <!-- DICE APPLY -->
+  <div id="sec-dice_apply" class="section">
+    <div class="page-title">🎲 Dice Apply <span id="badge-dice_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="ctrl-row">
+      <button id="btn-dice_apply" class="btn btn-primary" onclick="startFeature('dice_apply')">▶ Start</button>
+      <button id="stop-dice_apply" class="btn btn-danger" onclick="stopFeature('dice_apply')" style="display:none">■ Stop</button>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Stats</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="stat-row"><span class="stat-label">Applied</span><span id="d-applied" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Errors</span><span id="d-errors" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Session</span><span id="conn-dice2" class="badge disconnected"><span class="dot"></span>—</span></div>
+      </div>
+    </div>
+    <div class="card-title" style="margin-bottom:8px">Live Log</div>
+    <div class="log-panel" id="log-dice_apply"></div>
+  </div>
+
+  <!-- COMPANIES APPLY -->
+  <div id="sec-companies_apply" class="section">
+    <div class="page-title">🏢 Companies Apply <span id="badge-companies_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="ctrl-row">
+      <div class="company-row">
+        <select id="company-select" style="min-width:200px">
+          <option value="">— Select Company —</option>
+        </select>
+        <button id="btn-companies_apply" class="btn btn-primary" onclick="startCompanies()">▶ Start</button>
+        <button id="stop-companies_apply" class="btn btn-danger" onclick="stopFeature('companies_apply')" style="display:none">■ Stop</button>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Stats</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+        <div class="stat-row"><span class="stat-label">Applied</span><span id="c-applied" class="stat-val">—</span></div>
+        <div class="stat-row"><span class="stat-label">Errors</span><span id="c-errors" class="stat-val">—</span></div>
+      </div>
+    </div>
+    <div class="card-title" style="margin-bottom:8px">Live Log</div>
+    <div class="log-panel" id="log-companies_apply"></div>
+  </div>
+
+  <!-- PROFILE -->
+  <div id="sec-profile" class="section">
+    <div class="page-title">👤 Profile</div>
+
+    <!-- Connection Profile box -->
+    <div class="conn-box">
+      <div class="conn-title">Connection Profile</div>
+      <div class="conn-row">
+        <span class="conn-label">Gmail OAuth</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="p-conn-gmail" class="badge disconnected"><span class="dot"></span>Checking</span>
+          <button class="btn btn-ghost btn-sm" onclick="connectGmail()">Connect / Re-auth</button>
+        </div>
+      </div>
+      <div class="conn-row">
+        <span class="conn-label">Dice Session</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span id="p-conn-dice" class="badge disconnected"><span class="dot"></span>Checking</span>
+          <button class="btn btn-ghost btn-sm" onclick="startFeature('dice_apply')" title="Run Dice Apply to establish session">Setup Session</button>
+        </div>
+      </div>
+      <div class="conn-row">
+        <span class="conn-label">Ollama (LLM)</span>
+        <span id="p-conn-ollama" class="badge offline"><span class="dot"></span>Checking</span>
+      </div>
+    </div>
+
+    <form id="profile-form">
+
+      <fieldset>
+        <legend>Personal</legend>
+        <div class="profile-grid">
+          <div class="field full"><label>Full Name</label><input type="text" name="name"></div>
+          <div class="field"><label>Phone</label><input type="tel" name="phone"></div>
+          <div class="field"><label>Location (City, State)</label><input type="text" name="location"></div>
+          <div class="field"><label>Address Line 1</label><input type="text" name="address_line1"></div>
+          <div class="field"><label>Postal Code</label><input type="text" name="postal_code"></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Work Authorization</legend>
+        <div class="profile-grid">
+          <div class="field">
+            <label>Work Authorization</label>
+            <select name="work_auth">
+              <option>OPT / STEM OPT</option>
+              <option>H1B</option>
+              <option>H1B Transfer</option>
+              <option>H4 EAD</option>
+              <option>Green Card</option>
+              <option>US Citizen</option>
+              <option>TN Visa</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div class="field"><label>Visa / EAD Expiry</label><input type="text" name="visa_expiry" placeholder="e.g. July 2027"></div>
+          <div class="field">
+            <label>Needs Sponsorship</label>
+            <select name="needs_sponsorship">
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>W2 / C2C</label>
+            <select name="w2_c2c">
+              <option>W2</option>
+              <option>C2C</option>
+              <option>Both</option>
+            </select>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Job Preferences</legend>
+        <div class="profile-grid">
+          <div class="field"><label>Current Title</label><input type="text" name="current_title"></div>
+          <div class="field"><label>Current Company</label><input type="text" name="current_company"></div>
+          <div class="field"><label>Years of Experience</label><input type="number" name="years_experience" min="0" max="40"></div>
+          <div class="field"><label>Work Start Year</label><input type="text" name="work_start_year" placeholder="e.g. 2020"></div>
+          <div class="field full"><label>Skills (comma-separated)</label><textarea name="skills"></textarea></div>
+          <div class="field"><label>Previous Clients</label><input type="text" name="previous_clients"></div>
+          <div class="field">
+            <label>Preferred Work</label>
+            <select name="preferred_work">
+              <option>Any</option>
+              <option>Remote</option>
+              <option>Onsite</option>
+              <option>Hybrid</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Open to Relocation</label>
+            <select name="open_to_relocation">
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Open to F2F Interview</label>
+            <select name="open_to_f2f">
+              <option>Yes</option>
+              <option>No</option>
+            </select>
+          </div>
+          <div class="field"><label>Available to Start</label><input type="text" name="available_to_start" placeholder="e.g. 2 weeks"></div>
+          <div class="field"><label>Expected Salary</label><input type="text" name="expected_salary" placeholder="e.g. open to discussion"></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Education</legend>
+        <div class="profile-grid">
+          <div class="field"><label>School / University</label><input type="text" name="school"></div>
+          <div class="field">
+            <label>Degree</label>
+            <select name="degree">
+              <option>Master's Degree</option>
+              <option>Bachelor's Degree</option>
+              <option>PhD</option>
+              <option>Associate's Degree</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div class="field"><label>Graduation Year</label><input type="text" name="graduation_year" placeholder="e.g. 2024"></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Links</legend>
+        <div class="profile-grid">
+          <div class="field"><label>LinkedIn URL</label><input type="url" name="linkedin_url"></div>
+          <div class="field"><label>GitHub URL</label><input type="url" name="github_url"></div>
+          <div class="field"><label>Website / Portfolio</label><input type="url" name="website_url"></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Resumes</legend>
+        <div class="profile-grid">
+          <div class="field full"><label>Resume Folder (absolute path)</label><input type="text" name="resume_folder" placeholder="/Users/you/Desktop/amazon"></div>
+          <div class="field full"><label>Default Resume (absolute path to file)</label><input type="text" name="default_resume" placeholder="/Users/you/Desktop/amazon/RESUME.pdf"></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>EEOC (optional)</legend>
+        <div class="profile-grid">
+          <div class="field">
+            <label>Race / Ethnicity</label>
+            <select name="race">
+              <option>Asian</option>
+              <option>White</option>
+              <option>Black or African American</option>
+              <option>Hispanic or Latino</option>
+              <option>Two or More Races</option>
+              <option>Native American</option>
+              <option>Pacific Islander</option>
+              <option>Decline to self-identify</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Gender</label>
+            <select name="gender">
+              <option>Male</option>
+              <option>Female</option>
+              <option>Non-binary</option>
+              <option>Decline to self-identify</option>
+            </select>
+          </div>
+        </div>
+      </fieldset>
+
+    </form>
+    <div class="save-bar">
+      <button class="btn btn-primary" onclick="saveProfile()">💾 Save Profile</button>
+      <span id="save-msg" class="save-msg"></span>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<script>
+const PROFILE_EMAIL = {{ profile_email | tojson }};
+const FEATURES      = ['gmail_monitor','linkedin_outreach','dice_apply','companies_apply'];
+const streams       = {};
+
+// ── Tab switching ──────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('sec-' + name).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => {
+    if (n.getAttribute('onclick').includes("'" + name + "'")) n.classList.add('active');
+  });
+  if (name !== 'home' && name !== 'profile') connectStream(name);
+  if (name === 'profile') loadProfile();
+  if (name === 'companies_apply') loadCompanies();
+}
+
+// ── SSE log streams ────────────────────────────────────────────────────────────
+function connectStream(feature) {
+  if (streams[feature]) return;
+  const es = new EventSource('/api/stream/' + feature);
+  streams[feature] = es;
+  es.onmessage = e => {
+    const data = JSON.parse(e.data);
+    if (data.line === '__PROCESS_ENDED__') {
+      appendLog(feature, '■ Process ended', 'meta');
+      updateBadge(feature, false);
+      delete streams[feature];
+      es.close();
+      return;
+    }
+    appendLog(feature, (data.ts ? '[' + data.ts + '] ' : '') + data.line);
+  };
+  es.onerror = () => { delete streams[feature]; es.close(); };
+}
+
+function appendLog(feature, line, cls) {
+  const panel = document.getElementById('log-' + feature);
+  if (!panel) return;
+  const div = document.createElement('div');
+  div.className = 'log-line' + (cls ? ' ' + cls :
+    (line.includes('error') || line.includes('✗') || line.includes('Error') ? ' err' :
+     line.includes('✓') || line.includes('applied') ? ' ok' :
+     line.startsWith('▶') || line.startsWith('■') ? ' meta' : ''));
+  div.textContent = line;
+  panel.appendChild(div);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+// ── Status polling ─────────────────────────────────────────────────────────────
+function loadStatus() {
+  fetch('/api/status').then(r => r.json()).then(d => {
+    setConn('conn-gmail',   d.gmail,  'connected',    'disconnected');
+    setConn('conn-dice',    d.dice,   'connected',    'disconnected');
+    setConn('conn-ollama',  d.ollama, 'running',      'offline');
+    setConn('p-conn-gmail', d.gmail,  'connected',    'disconnected');
+    setConn('p-conn-dice',  d.dice,   'connected',    'disconnected');
+    setConn('p-conn-ollama',d.ollama, 'running',      'offline');
+    setConn('conn-dice2',   d.dice,   'connected',    'disconnected');
+    FEATURES.forEach(f => updateBadge(f, d.processes[f]));
+  }).catch(() => {});
+}
+
+function setConn(id, val, okVal, badVal) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const isOk = val === okVal;
+  el.className = 'badge ' + val;
+  el.innerHTML = '<span class="dot"></span>' + capitalize(val);
+}
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function updateBadge(feature, running) {
+  ['badge-', 'proc-'].forEach(prefix => {
+    const el = document.getElementById(prefix + feature);
+    if (!el) return;
+    el.className = 'badge ' + (running ? 'running' : 'stopped');
+    el.innerHTML = '<span class="dot"></span>' + (running ? 'Running' : 'Stopped');
+  });
+  const btn  = document.getElementById('btn-'  + feature);
+  const stop = document.getElementById('stop-' + feature);
+  if (btn)  btn.style.display  = running ? 'none'  : '';
+  if (stop) stop.style.display = running ? ''      : 'none';
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────────
+function loadStats() {
+  fetch('/api/stats').then(r => r.json()).then(d => {
+    const map = {
+      'dice_applied': ['s-dice_applied','d-applied'],
+      'dice_errors':  ['s-dice_errors', 'd-errors'],
+      'company_applied': ['s-company_applied','c-applied'],
+      'company_errors':  ['c-errors'],
+      'recruiters_total':   ['s-recruiters_total'],
+      'recruiters_replied': ['s-recruiters_replied'],
+      'interviews':         ['s-interviews'],
+    };
+    Object.entries(d).forEach(([k, v]) => {
+      (map[k] || []).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = v;
+      });
+    });
+  }).catch(() => {});
+}
+
+// ── Activity / Errors ──────────────────────────────────────────────────────────
+function loadActivity() {
+  fetch('/api/activity').then(r => r.json()).then(items => {
+    const feed = document.getElementById('activity-feed');
+    if (!items.length) return;
+    feed.innerHTML = items.slice(0,20).map(i =>
+      `<div class="feed-item">
+        <span class="feed-ts">${i.ts}</span>
+        <span class="feed-feat">${i.feature.replace('_',' ')}</span>
+        <span class="feed-line">${escHtml(i.line)}</span>
+      </div>`
+    ).join('');
+  }).catch(() => {});
+}
+
+function loadErrors() {
+  fetch('/api/errors').then(r => r.json()).then(items => {
+    const feed = document.getElementById('error-feed');
+    if (!items.length) { feed.innerHTML = '<div style="color:var(--muted);font-size:12px">No errors</div>'; return; }
+    feed.innerHTML = items.slice(0,10).map(i =>
+      `<div class="feed-item">
+        <span class="feed-ts">${i.ts}</span>
+        <span class="feed-feat">${i.feature.replace('_',' ')}</span>
+        <span class="feed-line err">${escHtml(i.line)}</span>
+      </div>`
+    ).join('');
+  }).catch(() => {});
+}
+
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
+// ── Feature controls ───────────────────────────────────────────────────────────
+function startFeature(feature, extra) {
+  fetch('/api/run/' + feature, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(extra || {})
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) alert('Error: ' + d.error);
+    else { connectStream(feature); loadStatus(); }
+  });
+}
+
+function stopFeature(feature) {
+  fetch('/api/stop/' + feature, {method:'POST'}).then(() => loadStatus());
+}
+
+function startCompanies() {
+  const company = document.getElementById('company-select').value;
+  if (!company) { alert('Please select a company first'); return; }
+  startFeature('companies_apply', {company});
+}
+
+function connectGmail() {
+  alert('Starting Gmail auth in the log panel.\nA browser window will open for OAuth — complete the sign-in there.');
+  startFeature('gmail_monitor');
+}
+
+// ── Companies list ─────────────────────────────────────────────────────────────
+function loadCompanies() {
+  fetch('/api/companies').then(r => r.json()).then(list => {
+    const sel = document.getElementById('company-select');
+    sel.innerHTML = '<option value="">— Select Company —</option>' +
+      list.map(c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('');
+  });
+}
+
+// ── Profile form ───────────────────────────────────────────────────────────────
+function loadProfile() {
+  fetch('/api/profile').then(r => r.json()).then(p => {
+    const form = document.getElementById('profile-form');
+    Object.entries(p).forEach(([k, v]) => {
+      const el = form.elements[k];
+      if (!el) return;
+      if (el.type === 'checkbox') {
+        el.checked = (v === true || v === 'true');
+      } else if (el.tagName === 'SELECT') {
+        // Handle boolean selects
+        const strV = (v === true || v === 'true') ? 'true' : (v === false || v === 'false') ? 'false' : String(v);
+        for (const opt of el.options) {
+          if (opt.value === strV || opt.text === strV) { opt.selected = true; break; }
+        }
+      } else {
+        el.value = v || '';
+      }
+    });
+  });
+}
+
+function saveProfile() {
+  const form = document.getElementById('profile-form');
+  const data = {};
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    if (el.type === 'checkbox') data[el.name] = el.checked;
+    else data[el.name] = el.value;
+  }
+  // Coerce booleans
+  ['needs_sponsorship','open_to_relocation'].forEach(k => {
+    if (k in data) data[k] = (data[k] === 'true' || data[k] === true);
+  });
+  fetch('/api/profile', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(data)
+  }).then(r => r.json()).then(d => {
+    const msg = document.getElementById('save-msg');
+    msg.textContent = d.ok ? '✓ Saved' : '✗ Save failed';
+    setTimeout(() => msg.textContent = '', 3000);
+  });
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+loadStatus();
+loadStats();
+loadActivity();
+loadErrors();
+
+// Auto-refresh intervals
+setInterval(loadStatus,   4000);
+setInterval(loadStats,    30000);
+setInterval(loadActivity, 10000);
+setInterval(loadErrors,   10000);
+</script>
+</body>
+</html>

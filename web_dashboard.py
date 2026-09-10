@@ -24,7 +24,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE           = Path(__file__).parent
@@ -39,8 +39,9 @@ LI_CONFIG_JSON  = _HERE / "linkedin_config.json"
 app = Flask(__name__)
 
 # ── Global state ───────────────────────────────────────────────────────────────
-PROFILE_EMAIL: str = ""
-PROFILE_NAME:  str = ""
+PROFILE_EMAIL:  str  = ""
+PROFILE_NAME:   str  = ""
+SETUP_REQUIRED: bool = False
 
 FEATURES = ["gmail_monitor", "linkedin_outreach", "dice_apply", "companies_apply"]
 
@@ -75,15 +76,20 @@ def _dice_session_dir(email: str) -> Path:
     return default if default.exists() else keyed
 
 def _resolve_profile(arg: str) -> tuple[str, str]:
+    global SETUP_REQUIRED
     if not PROFILES_JSON.exists():
-        sys.exit("profiles.json not found")
+        SETUP_REQUIRED = True
+        email = arg if "@" in arg else f"{arg}@gmail.com"
+        return email, arg
     profiles = json.loads(PROFILES_JSON.read_text())
     if arg in profiles:
         return arg, profiles[arg].get("name", arg)
     for email, data in profiles.items():
         if data.get("name", "").lower().startswith(arg.lower()):
             return email, data.get("name", email)
-    sys.exit(f"Profile '{arg}' not found in profiles.json")
+    SETUP_REQUIRED = True
+    email = arg if "@" in arg else f"{arg}@gmail.com"
+    return email, arg
 
 def _push_log(feature: str, line: str):
     ts    = datetime.now().strftime("%H:%M:%S")
@@ -113,9 +119,9 @@ def _read_output(feature: str, proc: subprocess.Popen):
 
 @app.route("/")
 def index():
-    return render_template("dashboard.html",
-                           profile_email=PROFILE_EMAIL,
-                           profile_name=PROFILE_NAME)
+    if SETUP_REQUIRED:
+        return redirect("/setup")
+    return render_template("dashboard.html", profile_email=PROFILE_EMAIL, profile_name=PROFILE_NAME)
 
 
 @app.route("/api/profile", methods=["GET"])
@@ -523,6 +529,96 @@ def api_profiles():
         return jsonify([])
     profiles = json.loads(PROFILES_JSON.read_text())
     return jsonify([{"email": e, "name": d.get("name", e)} for e, d in profiles.items()])
+
+
+@app.route("/setup")
+def setup_page():
+    return render_template("setup.html", profile_email=PROFILE_EMAIL)
+
+
+@app.route("/api/setup/status")
+def api_setup_status():
+    profiles = json.loads(PROFILES_JSON.read_text()) if PROFILES_JSON.exists() else {}
+    resumes  = json.loads(RESUMES_JSON.read_text())  if RESUMES_JSON.exists()  else {}
+    p = profiles.get(PROFILE_EMAIL, {})
+    r = resumes.get(PROFILE_EMAIL, {})
+    resume_folder = r.get("resume_folder", "")
+    has_resume = False
+    if resume_folder and Path(resume_folder).exists():
+        has_resume = bool(list(Path(resume_folder).glob("*.docx")) + list(Path(resume_folder).glob("*.pdf")))
+    return jsonify({
+        "profile": bool(p.get("name") and p.get("phone")),
+        "resume":  has_resume,
+        "gmail":   (_HERE / "gmail_credentials.json").exists(),
+        "email":   PROFILE_EMAIL,
+    })
+
+
+@app.route("/api/setup/profile", methods=["POST"])
+def api_setup_profile():
+    global PROFILE_NAME
+    data = request.json or {}
+    profiles = json.loads(PROFILES_JSON.read_text()) if PROFILES_JSON.exists() else {}
+    resumes  = json.loads(RESUMES_JSON.read_text())  if RESUMES_JSON.exists()  else {}
+    profiles[PROFILE_EMAIL] = {
+        "name":               data.get("name", ""),
+        "phone":              data.get("phone", ""),
+        "location":           data.get("location", ""),
+        "work_auth":          data.get("work_auth", ""),
+        "years_experience":   data.get("years_experience", 0),
+        "needs_sponsorship":  data.get("needs_sponsorship", False),
+        "open_to_relocation": data.get("open_to_relocation", False),
+        "skills":             data.get("skills", ""),
+        "linkedin_url":       data.get("linkedin_url", ""),
+        "github_url":         data.get("github_url", ""),
+        "portfolio_url":      data.get("portfolio_url", ""),
+        "summary":            data.get("summary", ""),
+    }
+    resumes.setdefault(PROFILE_EMAIL, {})
+    PROFILES_JSON.write_text(json.dumps(profiles, indent=2))
+    RESUMES_JSON.write_text(json.dumps(resumes, indent=2))
+    PROFILE_NAME = data.get("name", PROFILE_EMAIL)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/setup/resume", methods=["POST"])
+def api_setup_resume():
+    f = request.files.get("resume")
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "No file uploaded"})
+    resume_dir = _HERE / "resumes" / re.sub(r"[^a-z0-9]", "_", PROFILE_EMAIL.lower())
+    resume_dir.mkdir(parents=True, exist_ok=True)
+    dest = resume_dir / f.filename
+    f.save(str(dest))
+    resumes = json.loads(RESUMES_JSON.read_text()) if RESUMES_JSON.exists() else {}
+    resumes.setdefault(PROFILE_EMAIL, {})
+    resumes[PROFILE_EMAIL]["resume_folder"]  = str(resume_dir)
+    resumes[PROFILE_EMAIL]["default_resume"] = f.filename
+    RESUMES_JSON.write_text(json.dumps(resumes, indent=2))
+    return jsonify({"ok": True, "filename": f.filename})
+
+
+@app.route("/api/setup/gmail-creds", methods=["POST"])
+def api_setup_gmail_creds():
+    f = request.files.get("creds")
+    if not f:
+        return jsonify({"ok": False, "error": "No file uploaded"})
+    try:
+        raw = f.read()
+        parsed = json.loads(raw)
+        if "installed" not in parsed and "web" not in parsed:
+            return jsonify({"ok": False, "error": "Not a valid Gmail OAuth credentials file"})
+        (_HERE / "gmail_credentials.json").write_bytes(raw)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/setup/complete", methods=["POST"])
+def api_setup_complete():
+    global SETUP_REQUIRED
+    SETUP_REQUIRED = False
+    return jsonify({"ok": True})
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

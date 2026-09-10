@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Setup — Job Automation Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--card:#1a1d2e;--card2:#1e2235;
+  --border:#2a2d3e;--accent:#6c63ff;--accent2:#4f46e5;
+  --green:#22c55e;--red:#ef4444;--yellow:#f59e0b;
+  --text:#e2e8f0;--muted:#6b7280;
+}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:'Inter',system-ui,sans-serif;font-size:14px;
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;
+  justify-content:flex-start;padding:40px 16px 60px;
+}
+
+/* ── Wizard card ── */
+.wizard{width:100%;max-width:640px}
+.wizard-header{text-align:center;margin-bottom:36px}
+.wizard-header h1{font-size:26px;font-weight:800;letter-spacing:-.3px}
+.wizard-header p{color:var(--muted);margin-top:6px;font-size:14px}
+
+/* ── Progress bar ── */
+.progress{display:flex;align-items:center;justify-content:center;margin-bottom:36px;gap:0}
+.step-dot{
+  width:36px;height:36px;border-radius:50%;border:2px solid var(--border);
+  background:var(--card);display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;color:var(--muted);
+  transition:all .25s;flex-shrink:0;position:relative;z-index:1;
+}
+.step-dot.active{border-color:var(--accent);background:var(--accent);color:#fff}
+.step-dot.done{border-color:var(--green);background:var(--green);color:#fff}
+.step-line{
+  flex:1;height:2px;background:var(--border);max-width:80px;
+  transition:background .25s;
+}
+.step-line.done{background:var(--green)}
+.step-labels{display:flex;justify-content:space-between;margin-top:8px;padding:0 2px}
+.step-label{font-size:11px;color:var(--muted);text-align:center;width:36px;font-weight:500}
+.step-label.active{color:var(--accent)}
+.step-label.done{color:var(--green)}
+.progress-wrap{width:100%;max-width:420px;margin:0 auto 4px}
+
+/* ── Card ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:28px}
+
+/* ── Step panels ── */
+.step-panel{display:none}
+.step-panel.active{display:block}
+.step-title{font-size:18px;font-weight:700;margin-bottom:6px}
+.step-desc{color:var(--muted);font-size:13px;margin-bottom:24px;line-height:1.5}
+
+/* ── Form elements ── */
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:16px}
+.field label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.field label .req{color:var(--red);margin-left:2px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.full{grid-column:1/-1}
+input[type=text],input[type=email],input[type=url],input[type=tel],input[type=number],
+select,textarea{
+  background:var(--card2);border:1px solid var(--border);border-radius:8px;
+  color:var(--text);padding:9px 12px;font-size:13px;width:100%;outline:none;
+  font-family:inherit;transition:border-color .15s
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+input[readonly]{opacity:.6;cursor:not-allowed}
+textarea{resize:vertical;min-height:80px}
+select option{background:var(--card2)}
+
+/* ── Toggle switch ── */
+.toggle-row{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 12px;background:var(--card2);border:1px solid var(--border);
+  border-radius:8px;margin-bottom:12px}
+.toggle-label{font-size:13px;font-weight:500}
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-track{
+  position:absolute;inset:0;background:var(--border);border-radius:12px;
+  cursor:pointer;transition:background .2s;
+}
+.toggle input:checked + .toggle-track{background:var(--accent)}
+.toggle-thumb{
+  position:absolute;top:3px;left:3px;width:18px;height:18px;
+  background:#fff;border-radius:50%;transition:transform .2s;pointer-events:none;
+}
+.toggle input:checked ~ .toggle-thumb{transform:translateX(20px)}
+
+/* ── Drop zone ── */
+.drop-zone{
+  border:2px dashed var(--border);border-radius:10px;padding:36px 24px;
+  text-align:center;cursor:pointer;transition:all .2s;background:var(--card2);
+  position:relative;
+}
+.drop-zone:hover,.drop-zone.dragover{border-color:var(--accent);background:rgba(108,99,255,.06)}
+.drop-zone .dz-icon{font-size:36px;margin-bottom:10px;display:block}
+.drop-zone .dz-title{font-size:14px;font-weight:600;margin-bottom:4px}
+.drop-zone .dz-sub{font-size:12px;color:var(--muted)}
+.drop-zone input[type=file]{
+  position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;
+}
+.file-success{
+  display:none;align-items:center;gap:10px;padding:12px 16px;
+  background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);
+  border-radius:8px;margin-top:12px;
+}
+.file-success.show{display:flex}
+.file-success .check{color:var(--green);font-size:18px;flex-shrink:0}
+.file-success .fname{font-size:13px;font-weight:600;word-break:break-all}
+.file-success .fsize{font-size:11px;color:var(--muted);margin-top:1px}
+
+/* ── Buttons ── */
+.btn-row{display:flex;align-items:center;justify-content:space-between;margin-top:24px;gap:10px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  padding:10px 22px;border:none;border-radius:8px;font-size:14px;font-weight:600;
+  cursor:pointer;transition:all .15s;min-width:100px}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent2)}
+.btn-primary:disabled{opacity:.55;cursor:not-allowed}
+.btn-ghost{background:var(--card2);color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover{color:var(--text);border-color:var(--muted)}
+.btn-back{background:transparent;color:var(--muted);border:1px solid var(--border);padding:10px 16px}
+.btn-back:hover{color:var(--text)}
+.btn-success{background:var(--green);color:#fff}
+.btn-success:hover{background:#16a34a}
+.spinner{
+  width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
+  border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none;
+}
+.btn.loading .spinner{display:inline-block}
+.btn.loading .btn-text{opacity:0;width:0;overflow:hidden;margin:0;padding:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Inline error ── */
+.inline-err{
+  display:none;color:var(--red);font-size:12px;margin-top:6px;
+  padding:8px 12px;background:rgba(239,68,68,.1);border-radius:6px;
+  border:1px solid rgba(239,68,68,.25);
+}
+.inline-err.show{display:block}
+
+/* ── Details/instructions ── */
+details{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:0;margin-top:12px}
+details summary{
+  padding:12px 16px;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);
+  list-style:none;display:flex;align-items:center;justify-content:space-between;
+}
+details summary::-webkit-details-marker{display:none}
+details summary::after{content:'›';font-size:18px;transform:rotate(90deg);transition:transform .2s}
+details[open] summary::after{transform:rotate(-90deg) scaleX(-1)}
+details[open] summary{color:var(--text);border-bottom:1px solid var(--border)}
+.inst-body{padding:16px}
+.inst-body ol{padding-left:18px;line-height:1.8;font-size:13px;color:var(--muted)}
+.inst-body ol li{margin-bottom:4px}
+.inst-body ol li strong{color:var(--text)}
+.inst-body a{color:var(--accent);text-decoration:none}
+.inst-body a:hover{text-decoration:underline}
+
+/* ── Step 4 done checklist ── */
+.done-list{list-style:none;padding:0;margin-bottom:20px}
+.done-list li{display:flex;align-items:center;gap:10px;padding:10px 0;
+  border-bottom:1px solid var(--border);font-size:13px}
+.done-list li:last-child{border-bottom:none}
+.done-list .check-icon{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:13px;flex-shrink:0}
+.done-list .check-icon.ok{background:rgba(34,197,94,.15);color:var(--green)}
+.done-list .check-icon.skip{background:rgba(107,114,128,.12);color:var(--muted)}
+.done-list .item-name{font-weight:500}
+.done-list .item-note{font-size:11px;color:var(--muted);margin-top:1px}
+.done-hero{text-align:center;padding:16px 0 24px;font-size:15px;color:var(--muted);line-height:1.6}
+.done-hero strong{color:var(--text);display:block;font-size:20px;margin-bottom:6px}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div class="wizard">
+
+  <!-- Header -->
+  <div class="wizard-header">
+    <h1>Welcome to Job Automation</h1>
+    <p>Let's get your profile set up in a few quick steps.</p>
+  </div>
+
+  <!-- Progress indicator -->
+  <div class="progress-wrap">
+    <div class="progress">
+      <div class="step-dot active" id="dot-1">1</div>
+      <div class="step-line" id="line-1"></div>
+      <div class="step-dot" id="dot-2">2</div>
+      <div class="step-line" id="line-2"></div>
+      <div class="step-dot" id="dot-3">3</div>
+      <div class="step-line" id="line-3"></div>
+      <div class="step-dot" id="dot-4">4</div>
+    </div>
+    <div class="step-labels">
+      <span class="step-label active" id="lbl-1">Profile</span>
+      <span class="step-label" id="lbl-2">Resume</span>
+      <span class="step-label" id="lbl-3">Gmail</span>
+      <span class="step-label" id="lbl-4">Done</span>
+    </div>
+  </div>
+
+  <!-- Card -->
+  <div class="card">
+
+    <!-- ── Step 1: Personal Info ─────────────────────────────────────────── -->
+    <div class="step-panel active" id="step-1">
+      <div class="step-title">Personal Info</div>
+      <div class="step-desc">Tell us a bit about yourself. This information is stored locally and used to auto-fill job applications.</div>
+
+      <div class="grid-2">
+        <div class="field full">
+          <label>Full Name <span class="req">*</span></label>
+          <input type="text" id="s1-name" placeholder="Jane Smith" autocomplete="name">
+        </div>
+        <div class="field full">
+          <label>Email</label>
+          <input type="email" id="s1-email" value="{{ profile_email }}" readonly>
+        </div>
+        <div class="field">
+          <label>Phone <span class="req">*</span></label>
+          <input type="tel" id="s1-phone" placeholder="+1 (555) 000-0000" autocomplete="tel">
+        </div>
+        <div class="field">
+          <label>Location (City, State)</label>
+          <input type="text" id="s1-location" placeholder="Austin, TX">
+        </div>
+        <div class="field">
+          <label>Work Authorization</label>
+          <select id="s1-work-auth">
+            <option value="">Select…</option>
+            <option value="OPT">OPT / STEM OPT</option>
+            <option value="CPT">CPT</option>
+            <option value="H1B">H1B</option>
+            <option value="Green Card">Green Card</option>
+            <option value="US Citizen">US Citizen</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Years of Experience</label>
+          <input type="number" id="s1-years" placeholder="3" min="0" max="50">
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <span class="toggle-label">Needs Visa Sponsorship?</span>
+        <label class="toggle">
+          <input type="checkbox" id="s1-sponsorship">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <span class="toggle-label">Open to Relocation?</span>
+        <label class="toggle">
+          <input type="checkbox" id="s1-relocation">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+
+      <div class="grid-2" style="margin-top:16px">
+        <div class="field">
+          <label>LinkedIn URL</label>
+          <input type="url" id="s1-linkedin" placeholder="https://linkedin.com/in/…">
+        </div>
+        <div class="field">
+          <label>GitHub URL</label>
+          <input type="url" id="s1-github" placeholder="https://github.com/…">
+        </div>
+        <div class="field full">
+          <label>Portfolio / Website URL</label>
+          <input type="url" id="s1-portfolio" placeholder="https://yoursite.com">
+        </div>
+        <div class="field full">
+          <label>Professional Summary</label>
+          <textarea id="s1-summary" placeholder="Brief 2-3 sentence summary of your background and goals…"></textarea>
+        </div>
+        <div class="field full">
+          <label>Skills (comma-separated)</label>
+          <input type="text" id="s1-skills" placeholder="Python, Machine Learning, React, SQL…">
+        </div>
+      </div>
+
+      <div class="inline-err" id="err-1"></div>
+
+      <div class="btn-row">
+        <div></div>
+        <button class="btn btn-primary" id="btn-next-1" onclick="nextStep1()">
+          <div class="spinner"></div>
+          <span class="btn-text">Next &rarr;</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── Step 2: Resume ─────────────────────────────────────────────────── -->
+    <div class="step-panel" id="step-2">
+      <div class="step-title">Upload Your Resume</div>
+      <div class="step-desc">Upload your primary resume. You can add more later from the Profile section. Accepts .docx and .pdf files.</div>
+
+      <div class="drop-zone" id="drop-zone" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+        <input type="file" id="resume-file" accept=".pdf,.docx" onchange="onFileChosen(this.files[0])">
+        <span class="dz-icon">📄</span>
+        <div class="dz-title">Drag &amp; drop your resume here</div>
+        <div class="dz-sub">or click to browse &mdash; .pdf or .docx only</div>
+      </div>
+
+      <div class="file-success" id="file-success">
+        <span class="check">&#10003;</span>
+        <div>
+          <div class="fname" id="file-name"></div>
+          <div class="fsize" id="file-size"></div>
+        </div>
+      </div>
+
+      <div class="inline-err" id="err-2"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-back" onclick="goToStep(1)">&larr; Back</button>
+        <button class="btn btn-primary" id="btn-next-2" onclick="nextStep2()">
+          <div class="spinner"></div>
+          <span class="btn-text">Next &rarr;</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── Step 3: Gmail Credentials ─────────────────────────────────────── -->
+    <div class="step-panel" id="step-3">
+      <div class="step-title">Gmail OAuth Credentials</div>
+      <div class="step-desc">This allows the system to send emails and monitor your inbox for recruiter responses. You can skip this now and configure it later.</div>
+
+      <details id="gmail-instructions">
+        <summary>How to get your Gmail credentials file</summary>
+        <div class="inst-body">
+          <ol>
+            <li>Go to <a href="https://console.cloud.google.com" target="_blank">console.cloud.google.com</a> and sign in.</li>
+            <li><strong>Create a new project</strong> (or select an existing one).</li>
+            <li>In the search bar, search for <strong>Gmail API</strong> and click <strong>Enable</strong>.</li>
+            <li>Go to <strong>OAuth consent screen</strong> &rarr; select <strong>External</strong> &rarr; fill in App name &rarr; add your email as a <strong>Test User</strong>.</li>
+            <li>Go to <strong>Credentials</strong> &rarr; <strong>+ Create Credentials</strong> &rarr; <strong>OAuth client ID</strong>.</li>
+            <li>Choose <strong>Desktop app</strong> as the application type &rarr; click <strong>Create</strong>.</li>
+            <li>Click <strong>Download JSON</strong> and upload that file below.</li>
+          </ol>
+        </div>
+      </details>
+
+      <div style="margin-top:20px">
+        <div class="drop-zone" id="drop-zone-gmail" ondragover="onDragOverGmail(event)" ondragleave="onDragLeaveGmail(event)" ondrop="onDropGmail(event)">
+          <input type="file" id="gmail-file" accept=".json" onchange="onGmailFileChosen(this.files[0])">
+          <span class="dz-icon">🔑</span>
+          <div class="dz-title">Drop <code>credentials.json</code> here</div>
+          <div class="dz-sub">or click to browse</div>
+        </div>
+
+        <div class="file-success" id="gmail-file-success">
+          <span class="check">&#10003;</span>
+          <div>
+            <div class="fname" id="gmail-file-name"></div>
+            <div class="fsize" id="gmail-file-size"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="inline-err" id="err-3"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-back" onclick="goToStep(2)">&larr; Back</button>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-ghost" onclick="skipGmail()">Skip for now</button>
+          <button class="btn btn-primary" id="btn-next-3" onclick="nextStep3()">
+            <div class="spinner"></div>
+            <span class="btn-text">Next &rarr;</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Step 4: Done ───────────────────────────────────────────────────── -->
+    <div class="step-panel" id="step-4">
+      <div class="done-hero">
+        <strong>You're all set!</strong>
+        Your profile is saved and ready to go.
+      </div>
+
+      <ul class="done-list" id="done-checklist">
+        <li>
+          <div class="check-icon ok" id="done-profile-icon">&#10003;</div>
+          <div>
+            <div class="item-name">Profile saved</div>
+            <div class="item-note" id="done-profile-note">Personal info stored locally</div>
+          </div>
+        </li>
+        <li>
+          <div class="check-icon" id="done-resume-icon">&#10003;</div>
+          <div>
+            <div class="item-name">Resume uploaded</div>
+            <div class="item-note" id="done-resume-note">Ready for applications</div>
+          </div>
+        </li>
+        <li>
+          <div class="check-icon" id="done-gmail-icon">&#10003;</div>
+          <div>
+            <div class="item-name">Gmail credentials</div>
+            <div class="item-note" id="done-gmail-note">Configured</div>
+          </div>
+        </li>
+      </ul>
+
+      <div class="inline-err" id="err-4"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-back" onclick="goToStep(3)">&larr; Back</button>
+        <button class="btn btn-success" id="btn-launch" onclick="launchDashboard()">
+          <div class="spinner"></div>
+          <span class="btn-text">Launch Dashboard &rarr;</span>
+        </button>
+      </div>
+    </div>
+
+  </div><!-- /card -->
+</div><!-- /wizard -->
+
+<script>
+const PROFILE_EMAIL = {{ profile_email | tojson }};
+let currentStep = 1;
+let resumeFile  = null;
+let gmailFile   = null;
+let setupStatus = { profile: false, resume: false, gmail: false };
+
+// ── Utilities ──────────────────────────────────────────────────────────────────
+function setLoading(btnId, on) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = on;
+  btn.classList.toggle('loading', on);
+}
+
+function showErr(step, msg) {
+  const el = document.getElementById('err-' + step);
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.toggle('show', !!msg);
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// ── Progress indicator ─────────────────────────────────────────────────────────
+function updateProgress(step) {
+  for (let i = 1; i <= 4; i++) {
+    const dot = document.getElementById('dot-' + i);
+    const lbl = document.getElementById('lbl-' + i);
+    dot.className = 'step-dot' + (i < step ? ' done' : i === step ? ' active' : '');
+    dot.textContent = i < step ? '✓' : i;
+    lbl.className = 'step-label' + (i < step ? ' done' : i === step ? ' active' : '');
+    if (i < 4) {
+      document.getElementById('line-' + i).className = 'step-line' + (i < step ? ' done' : '');
+    }
+  }
+}
+
+// ── Step navigation ────────────────────────────────────────────────────────────
+function goToStep(n) {
+  document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('step-' + n).classList.add('active');
+  currentStep = n;
+  updateProgress(n);
+  showErr(n, '');
+  if (n === 4) refreshDonePage();
+}
+
+// ── Fetch setup status on load ─────────────────────────────────────────────────
+async function loadSetupStatus() {
+  try {
+    const res = await fetch('/api/setup/status');
+    setupStatus = await res.json();
+    // Pre-fill email
+    const emailEl = document.getElementById('s1-email');
+    if (emailEl && setupStatus.email) emailEl.value = setupStatus.email;
+  } catch(e) {}
+}
+
+// ── Step 1: Profile ────────────────────────────────────────────────────────────
+async function nextStep1() {
+  showErr(1, '');
+  const name  = document.getElementById('s1-name').value.trim();
+  const phone = document.getElementById('s1-phone').value.trim();
+  if (!name)  { showErr(1, 'Full name is required.'); return; }
+  if (!phone) { showErr(1, 'Phone number is required.'); return; }
+
+  setLoading('btn-next-1', true);
+  try {
+    const payload = {
+      name,
+      phone,
+      location:           document.getElementById('s1-location').value.trim(),
+      work_auth:          document.getElementById('s1-work-auth').value,
+      years_experience:   parseInt(document.getElementById('s1-years').value) || 0,
+      needs_sponsorship:  document.getElementById('s1-sponsorship').checked,
+      open_to_relocation: document.getElementById('s1-relocation').checked,
+      linkedin_url:       document.getElementById('s1-linkedin').value.trim(),
+      github_url:         document.getElementById('s1-github').value.trim(),
+      portfolio_url:      document.getElementById('s1-portfolio').value.trim(),
+      summary:            document.getElementById('s1-summary').value.trim(),
+      skills:             document.getElementById('s1-skills').value.trim(),
+    };
+    const res  = await fetch('/api/setup/profile', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Save failed');
+    setupStatus.profile = true;
+    goToStep(2);
+  } catch(e) {
+    showErr(1, e.message || 'Something went wrong. Please try again.');
+  } finally {
+    setLoading('btn-next-1', false);
+  }
+}
+
+// ── Step 2: Resume ─────────────────────────────────────────────────────────────
+function onDragOver(e)  { e.preventDefault(); document.getElementById('drop-zone').classList.add('dragover'); }
+function onDragLeave(e) { document.getElementById('drop-zone').classList.remove('dragover'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) onFileChosen(file);
+}
+function onFileChosen(file) {
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['pdf','docx'].includes(ext)) {
+    showErr(2, 'Please upload a .pdf or .docx file.');
+    return;
+  }
+  showErr(2, '');
+  resumeFile = file;
+  document.getElementById('file-name').textContent = file.name;
+  document.getElementById('file-size').textContent = fmtSize(file.size);
+  document.getElementById('file-success').classList.add('show');
+  // Update drop zone
+  document.querySelector('#drop-zone .dz-title').textContent = 'File selected';
+  document.querySelector('#drop-zone .dz-sub').textContent   = 'Click to choose a different file';
+}
+
+async function nextStep2() {
+  showErr(2, '');
+  if (!resumeFile) {
+    // Allow skipping if already has a resume
+    if (setupStatus.resume) { goToStep(3); return; }
+    showErr(2, 'Please upload your resume before continuing.');
+    return;
+  }
+  setLoading('btn-next-2', true);
+  try {
+    const fd = new FormData();
+    fd.append('resume', resumeFile);
+    const res  = await fetch('/api/setup/resume', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Upload failed');
+    setupStatus.resume = true;
+    goToStep(3);
+  } catch(e) {
+    showErr(2, e.message || 'Upload failed. Please try again.');
+  } finally {
+    setLoading('btn-next-2', false);
+  }
+}
+
+// ── Step 3: Gmail Credentials ──────────────────────────────────────────────────
+function onDragOverGmail(e)  { e.preventDefault(); document.getElementById('drop-zone-gmail').classList.add('dragover'); }
+function onDragLeaveGmail(e) { document.getElementById('drop-zone-gmail').classList.remove('dragover'); }
+function onDropGmail(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone-gmail').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) onGmailFileChosen(file);
+}
+function onGmailFileChosen(file) {
+  if (!file) return;
+  showErr(3, '');
+  gmailFile = file;
+  document.getElementById('gmail-file-name').textContent = file.name;
+  document.getElementById('gmail-file-size').textContent = fmtSize(file.size);
+  document.getElementById('gmail-file-success').classList.add('show');
+  document.querySelector('#drop-zone-gmail .dz-title').textContent = 'File selected';
+  document.querySelector('#drop-zone-gmail .dz-sub').textContent   = 'Click to choose a different file';
+}
+
+async function nextStep3() {
+  showErr(3, '');
+  if (!gmailFile) {
+    showErr(3, 'Please select a credentials file, or use "Skip for now".');
+    return;
+  }
+  setLoading('btn-next-3', true);
+  try {
+    const fd = new FormData();
+    fd.append('creds', gmailFile);
+    const res  = await fetch('/api/setup/gmail-creds', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Upload failed');
+    setupStatus.gmail = true;
+    goToStep(4);
+  } catch(e) {
+    showErr(3, e.message || 'Upload failed. Please check the file and try again.');
+  } finally {
+    setLoading('btn-next-3', false);
+  }
+}
+
+function skipGmail() {
+  setupStatus.gmail = false;
+  goToStep(4);
+}
+
+// ── Step 4: Done ───────────────────────────────────────────────────────────────
+function refreshDonePage() {
+  const items = [
+    { key: 'profile', iconId: 'done-profile-icon', noteId: 'done-profile-note',
+      okNote: 'Personal info saved', skipNote: 'Not completed — go back to Step 1' },
+    { key: 'resume',  iconId: 'done-resume-icon',  noteId: 'done-resume-note',
+      okNote: 'Resume ready for applications', skipNote: 'No resume — you can add it later from Profile' },
+    { key: 'gmail',   iconId: 'done-gmail-icon',   noteId: 'done-gmail-note',
+      okNote: 'OAuth credentials configured', skipNote: 'Skipped — Gmail features will be unavailable' },
+  ];
+  items.forEach(({ key, iconId, noteId, okNote, skipNote }) => {
+    const ok   = setupStatus[key];
+    const icon = document.getElementById(iconId);
+    const note = document.getElementById(noteId);
+    icon.className  = 'check-icon ' + (ok ? 'ok' : 'skip');
+    icon.textContent = ok ? '✓' : '—';
+    note.textContent = ok ? okNote : skipNote;
+  });
+}
+
+async function launchDashboard() {
+  setLoading('btn-launch', true);
+  showErr(4, '');
+  try {
+    await fetch('/api/setup/complete', { method: 'POST' });
+    window.location.href = '/';
+  } catch(e) {
+    showErr(4, 'Could not reach the server. Please refresh.');
+    setLoading('btn-launch', false);
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+loadSetupStatus();
+</script>
+</body>
+</html>

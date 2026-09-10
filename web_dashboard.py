@@ -56,6 +56,22 @@ def _safe(email: str) -> str:
 def _profile_dir(email: str) -> Path:
     return Path.home() / f".dice-playwright-profile-{_safe(email)}"
 
+def _dice_session_dir(email: str) -> Path:
+    """Find the actual Playwright session directory used by main.py for this email."""
+    home = Path.home()
+    for p in sorted(home.iterdir()):
+        if not p.is_dir() or not p.name.startswith(".dice-"):
+            continue
+        ep = p / ".profile_email"
+        if ep.exists() and ep.read_text().strip().lower() == email.lower():
+            return p
+    # Fallback: email-keyed dir, then bare default
+    keyed = _profile_dir(email)
+    if keyed.exists():
+        return keyed
+    default = home / ".dice-playwright-profile"
+    return default if default.exists() else keyed
+
 def _resolve_profile(arg: str) -> tuple[str, str]:
     if not PROFILES_JSON.exists():
         sys.exit("profiles.json not found")
@@ -163,7 +179,7 @@ def api_status():
 @app.route("/api/jobs")
 def api_jobs():
     """Return applied jobs for the current profile, most-recent first."""
-    per_csv = _profile_dir(PROFILE_EMAIL) / "applied_jobs.csv"
+    per_csv = _dice_session_dir(PROFILE_EMAIL) / "applied_jobs.csv"
     csv_path = per_csv if per_csv.exists() else APPLIED_CSV
     rows = []
     if csv_path.exists():
@@ -197,7 +213,7 @@ def api_stats():
                  recruiters_total=0, recruiters_replied=0, interviews=0)
 
     # Dice — per-profile CSV first, fallback to global
-    per_csv = _profile_dir(PROFILE_EMAIL) / "applied_jobs.csv"
+    per_csv = _dice_session_dir(PROFILE_EMAIL) / "applied_jobs.csv"
     for csv_path in ([per_csv] if per_csv.exists() else [APPLIED_CSV]):
         if not csv_path.exists():
             continue

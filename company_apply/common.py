@@ -45,7 +45,7 @@ _watcher_stops: dict[str, asyncio.Event] = {}
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-_HERE            = Path(__file__).parent
+_HERE            = Path(__file__).parent.parent  # dice_auto_apply/ root
 COMPANY_DB_PATH       = _HERE / "company_careers_db.json"
 APPLIED_LOG_PATH      = _HERE / "external_applied_jobs.csv"
 PROFILES_JSON         = _HERE / "profiles.json"

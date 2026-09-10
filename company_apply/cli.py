@@ -23,6 +23,7 @@ load_dotenv()
 from .common import (
     add_company_interactive,
     ashby_list_jobs,
+    APPLIED_LOG_PATH,
     BETWEEN_JOBS,
     check_gmail_confirmation,
     ensure_profile_complete,
@@ -37,12 +38,13 @@ from .common import (
     load_company_db,
     load_saved_filters,
     log_applied,
+    RESUMES_JSON,
     save_filters,
     stripe_list_jobs,
     workday_list_jobs,
 )
 from .greenhouse import _fill_greenhouse, _start_code_watcher
-from .workday import _fill_workday, setup_workday_session
+from .workday import _fill_workday, setup_workday_session, _workday_session_exists, _workday_session_file
 from .lever import _fill_lever
 from .ashby import _fill_ashby
 

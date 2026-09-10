@@ -3,10 +3,11 @@ import json
 import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from playwright.async_api import Page, Frame, BrowserContext
+from playwright.async_api import async_playwright, Page, Frame, BrowserContext
 
 # ── Imports from sibling modules ────────────────────────────────────────────────
 from .common import (
@@ -458,17 +459,15 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
 
         if len(month_inps) > 1:
             # "I currently work here" not effective — To field still visible
-            # Fill WE To, then education years start at index 2
             await month_inps[1].fill("01")
             if len(year_inps) > 1:
                 await year_inps[1].fill(cur_yr)
             edu_yr_i = 2
         else:
-            # Checkbox effective — education year inputs start at index 1
             edu_yr_i = 1
 
-        # Education: From (start) and To (graduation) — fill both so To > From
-        edu_from = str(int(grad_yr) - 2)  # 2 years before graduation
+        # Education: From (start) and To (graduation)
+        edu_from = str(int(grad_yr) - 2)
         if edu_yr_i < len(year_inps):
             await year_inps[edu_yr_i].fill(edu_from)
         if edu_yr_i + 1 < len(year_inps):
@@ -2341,6 +2340,64 @@ async def _fill_workday(
                 print(f"          [Workday] ⚠ page still shows '{step_name}' — may have errors", flush=True)
         except Exception as e:
             print(f"          [Workday] {step_name} step warning: {e}", flush=True)
+
+    # Handle CC-305 "Voluntary Self-Identification of Disability" form that Workday
+    # shows after the SI disability radio — it requires Name + Date before advancing.
+    try:
+        _cc305 = False
+        if await apply_page.locator("text='CC-305'").count() > 0:
+            _cc305 = True
+        elif await apply_page.locator("[data-automation-id='formField-dateSignedOn']").count() > 0:
+            _cc305 = True
+        elif await apply_page.locator("input[placeholder*='MM/DD/YYYY'], input[placeholder='MM/DD/YYYY']").count() > 0:
+            _cc305 = True
+        if _cc305:
+            print(f"          [Workday] CC-305 form detected — filling Name + Date", flush=True)
+            # Name field
+            name_val = profile.get("name", "")
+            if name_val:
+                name_inp = apply_page.locator("[data-automation-id='formField-name'] input").first
+                if await name_inp.count() == 0:
+                    for _t_inp in await apply_page.locator("input[type='text']").all():
+                        try:
+                            if not await _t_inp.input_value():
+                                name_inp = _t_inp
+                                break
+                        except Exception:
+                            pass
+                if await name_inp.count() > 0 and not await name_inp.input_value():
+                    await name_inp.fill(name_val)
+                    print(f"          [Workday] CC-305 Name → '{name_val}'", flush=True)
+            # Date field
+            from datetime import date as _dt_cc
+            _today = _dt_cc.today()
+            _date_str = _today.strftime('%m/%d/%Y')
+            _date_ff = apply_page.locator("[data-automation-id='formField-dateSignedOn']").first
+            _date_done = False
+            if await _date_ff.count() > 0:
+                for _seg, _v in (("dateSectionMonth-input", str(_today.month).zfill(2)),
+                                  ("dateSectionDay-input",   str(_today.day).zfill(2)),
+                                  ("dateSectionYear-input",  str(_today.year))):
+                    _seg_inp = _date_ff.locator(f"[data-automation-id='{_seg}']").first
+                    if await _seg_inp.count() > 0:
+                        await _seg_inp.fill(_v)
+                        _date_done = True
+            if not _date_done:
+                for _di in await apply_page.locator(
+                    "input[placeholder*='MM'], input[placeholder*='date' i], input[type='date']"
+                ).all():
+                    try:
+                        await _di.fill(_date_str)
+                        _date_done = True
+                        print(f"          [Workday] CC-305 Date → {_date_str}", flush=True)
+                        break
+                    except Exception:
+                        pass
+            # Advance past CC-305 to Review
+            await _wd_next(apply_page)
+            await asyncio.sleep(1.5)
+    except Exception as _cc_e:
+        print(f"          [Workday] CC-305 handler: {_cc_e}", flush=True)
 
     # Final submit
     print(f"          [Workday] Attempting submit...", flush=True)

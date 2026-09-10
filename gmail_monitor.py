@@ -336,6 +336,42 @@ def _extract_first_name(from_raw: str) -> str:
     return first.capitalize()
 
 
+_FWD_HEADER_RE = re.compile(
+    r"-{3,}\s*Forwarded message\s*-{3,}|Begin forwarded message",
+    re.I,
+)
+_FWD_FROM_RE = re.compile(
+    r"^From:\s*(.+?)\s*$",
+    re.I | re.MULTILINE,
+)
+
+def _resolve_recruiter(from_raw: str, subject: str, body: str) -> tuple[str, str]:
+    """
+    If the email is a forward, extract the original recruiter's From line from
+    the body and return (recruiter_from_raw, recruiter_email).
+    Otherwise return the direct sender unchanged.
+    """
+    is_fwd = subject.strip().lower().startswith(("fwd:", "fw:")) or \
+             bool(_FWD_HEADER_RE.search(body))
+    if not is_fwd:
+        m = re.search(r"[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}", from_raw)
+        return from_raw, (m.group().lower() if m else from_raw.lower())
+
+    # Find the first "From:" line inside the forwarded block
+    fwd_start = _FWD_HEADER_RE.search(body)
+    search_text = body[fwd_start.start():] if fwd_start else body
+    matches = _FWD_FROM_RE.findall(search_text)
+    if matches:
+        recruiter_raw = matches[0].strip()
+        m = re.search(r"[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}", recruiter_raw)
+        recruiter_email = m.group().lower() if m else recruiter_raw.lower()
+        return recruiter_raw, recruiter_email
+
+    # Fallback to original sender
+    m = re.search(r"[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}", from_raw)
+    return from_raw, (m.group().lower() if m else from_raw.lower())
+
+
 _label_cache: dict[str, str] = {}
 
 def _apply_label(svc, msg_id: str, name: str):
@@ -794,6 +830,9 @@ async def _handle_new_message(
             await asyncio.to_thread(_get_full_message, svc, msg_id)
     except Exception:
         return
+
+    # If this is a forwarded email, reply to the original recruiter, not the forwarder
+    from_raw, from_email = _resolve_recruiter(from_raw, subject, body)
 
     clf      = await asyncio.to_thread(_classify_sync, from_raw, subject, body)
     category = clf["category"]

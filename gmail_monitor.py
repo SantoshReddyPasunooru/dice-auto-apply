@@ -493,7 +493,14 @@ def _classify_sync(from_raw: str, subject: str, body: str) -> dict:
                                     "do not reply", "donotreply", "automatic reply",
                                     "this is an automated", "you are receiving this",
                                     "manage your preferences", "email preferences",
-                                    "click here to unsubscribe", "opt out"]):
+                                    "click here to unsubscribe", "opt out",
+                                    # Body-shop / training-placement detection
+                                    "training and placement", "training program",
+                                    "not a direct job", "not a direct client",
+                                    "bench sales", "we place candidates",
+                                    "staffing and training", "our program is designed",
+                                    "placement program", "placement fee",
+                                    "pay for training"]):
         return {"category": "JUNK", "reason": "auto-reply/marketing detected",
                 "wants_resume": False, "is_interview": False,
                 "is_rtr": False, "is_offer": False}
@@ -781,7 +788,7 @@ def _generate_reply_sync(
 async def _handle_new_message(
     email: str, svc, gs: gmail_sender.GmailSender,
     profile_data: dict, stats: "ProfileStats", tag: str,
-    msg_id: str, processed_ids: set,
+    msg_id: str, processed_ids: set, thread_reply_counts: dict,
 ):
     """
     Classify and act on a single new message.
@@ -879,6 +886,15 @@ async def _handle_new_message(
             if clf.get("is_offer"):
                 stats.offers += 1
 
+            # Hard cap: stop auto-replying after MAX_AUTO_REPLIES_PER_THREAD sends
+            # in this thread. Human must take over beyond that point.
+            auto_sent = thread_reply_counts.get(thread_id, 0)
+            if auto_sent >= MAX_AUTO_REPLIES_PER_THREAD:
+                await asyncio.to_thread(_mark_read, svc, msg_id)
+                _log(tag, "🛑", f"Auto-reply limit ({MAX_AUTO_REPLIES_PER_THREAD}) reached — human needed",
+                     f"{from_email} | {subject[:35]}")
+                return
+
             ctx_tag = " [follow-up]" if is_followup else " [first contact]"
             _log(tag, "📨", f"Received [{category}]{ctx_tag} {tab_label}",
                  f"{from_email} → {sender_short} | {subject[:35]}")
@@ -908,6 +924,8 @@ async def _handle_new_message(
             if ok:
                 await asyncio.to_thread(_mark_read, svc, msg_id)
                 stats.replies_sent += 1
+                thread_reply_counts[thread_id] = auto_sent + 1
+                await asyncio.to_thread(_save_thread_replies, email, thread_reply_counts)
 
                 if category == "INTERVIEW" or clf.get("is_interview"):
                     await asyncio.to_thread(_apply_label, svc, msg_id, "outreach/interview")
@@ -971,6 +989,37 @@ def _save_processed_ids(email: str, ids: set[str]):
         pass
 
 
+MAX_AUTO_REPLIES_PER_THREAD = 2   # initial reply + one follow-up; human takes over after
+
+
+def _thread_replies_path(email: str) -> Path:
+    safe = re.sub(r"[^a-z0-9]", "_", email.lower())
+    return Path.home() / f".dice-playwright-profile-{safe}" / "gmail_thread_replies.json"
+
+
+def _load_thread_replies(email: str) -> dict[str, int]:
+    p = _thread_replies_path(email)
+    try:
+        if p.exists():
+            return json.loads(p.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_thread_replies(email: str, counts: dict[str, int]):
+    p = _thread_replies_path(email)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Keep only last 2000 threads to avoid unbounded growth
+        if len(counts) > 2000:
+            keys = sorted(counts, key=lambda k: counts[k])[-2000:]
+            counts = {k: counts[k] for k in keys}
+        p.write_text(json.dumps(counts))
+    except Exception:
+        pass
+
+
 async def _monitor_profile(email: str, profile_data: dict,
                            gs: gmail_sender.GmailSender):
     tag   = email.split("@")[0][:12]
@@ -978,7 +1027,8 @@ async def _monitor_profile(email: str, profile_data: dict,
     stats.name         = profile_data.get("name", email.split("@")[0])
     stats.uptime_start = datetime.now().strftime("%H:%M:%S")
 
-    processed_ids: set[str] = _load_processed_ids(email)   # persisted across restarts
+    processed_ids:      set[str]      = _load_processed_ids(email)
+    thread_reply_counts: dict[str, int] = _load_thread_replies(email)
     history_id:    str | None = None
     svc = None
 
@@ -1020,7 +1070,7 @@ async def _monitor_profile(email: str, profile_data: dict,
                 for ref in new_msgs:
                     await _handle_new_message(
                         email, svc, gs, profile_data, stats, tag,
-                        ref["id"], processed_ids,
+                        ref["id"], processed_ids, thread_reply_counts,
                     )
             except Exception as e:
                 _log(tag, "✗", "Initial scan error", str(e)[:60])
@@ -1051,7 +1101,7 @@ async def _monitor_profile(email: str, profile_data: dict,
                 for msg_ref in record.get("messagesAdded", []):
                     await _handle_new_message(
                         email, svc, gs, profile_data, stats, tag,
-                        msg_ref["message"]["id"], processed_ids,
+                        msg_ref["message"]["id"], processed_ids, thread_reply_counts,
                     )
 
         except Exception as exc:

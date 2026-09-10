@@ -986,6 +986,7 @@ async def run_outreach(config: dict, tag: str = ""):
                         name=recruiter,
                         company=details.get("company", ""),
                         title=details.get("title", ""),
+                        location=details.get("location", ""),
                         source="linkedin",
                         status="contacted",
                     )

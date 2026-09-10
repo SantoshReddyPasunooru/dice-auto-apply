@@ -176,6 +176,83 @@ def api_status():
     return jsonify({"gmail": gmail, "dice": dice, "ollama": ollama, "processes": procs})
 
 
+@app.route("/api/recruiters")
+def api_recruiters():
+    """Return recruiter contacts. ?src=linkedin|gmail filters by source."""
+    src_filter = request.args.get("src", "")   # "linkedin" | "gmail" | "" (all)
+    rows = []
+    if RECRUITERS_CSV.exists():
+        try:
+            with open(RECRUITERS_CSV) as f:
+                for row in csv.DictReader(f):
+                    src    = row.get("source", "")
+                    status = row.get("last_status", "")
+                    if status in ("junk",):
+                        continue
+                    sources     = [s.strip() for s in src.split(",")]
+                    is_linkedin = "linkedin" in sources
+                    is_inbox    = "gmail_inbox" in sources
+                    if src_filter == "linkedin":
+                        if not is_linkedin:
+                            continue
+                    elif src_filter == "gmail":
+                        if not (is_inbox and status in ("contacted", "replied", "interview", "rtr", "offer")):
+                            continue
+                    else:
+                        # default: linkedin + engaged gmail_inbox
+                        if not is_linkedin and not (is_inbox and status in ("contacted", "replied", "interview", "rtr", "offer")):
+                            continue
+                    rows.append({
+                        "date":     row.get("last_seen", "")[:10],
+                        "name":     row.get("name", ""),
+                        "email":    row.get("email", ""),
+                        "company":  row.get("company", ""),
+                        "title":    row.get("title", ""),
+                        "location": row.get("location", ""),
+                        "source":   src,
+                        "status":   status,
+                        "times":    row.get("times_contacted", "1"),
+                    })
+        except Exception:
+            pass
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    limit = request.args.get("limit", 500, type=int)
+    return jsonify(rows[:limit])
+
+
+@app.route("/api/company-jobs")
+def api_company_jobs():
+    """Return company applications for the current profile, most-recent first."""
+    rows = []
+    if EXT_CSV.exists():
+        try:
+            with open(EXT_CSV) as f:
+                for row in csv.DictReader(f):
+                    if not any(row.values()):
+                        continue
+                    if row.get("profile_email", PROFILE_EMAIL) != PROFILE_EMAIL:
+                        continue
+                    status = row.get("status", "")
+                    if "skipped" in status:
+                        continue
+                    ts = row.get("timestamp", "")
+                    rows.append({
+                        "date":    ts[:10] if ts else "",
+                        "time":    ts[11:16] if len(ts) > 10 else "",
+                        "company": row.get("company", ""),
+                        "ats":     row.get("ats", ""),
+                        "title":   row.get("job_title", ""),
+                        "location":row.get("location", ""),
+                        "url":     row.get("job_url", ""),
+                        "status":  status,
+                    })
+        except Exception:
+            pass
+    rows.reverse()
+    limit = request.args.get("limit", 500, type=int)
+    return jsonify(rows[:limit])
+
+
 @app.route("/api/jobs")
 def api_jobs():
     """Return applied jobs for the current profile, most-recent first."""

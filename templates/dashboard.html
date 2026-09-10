@@ -240,6 +240,30 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
     </div>
     <div class="card-title" style="margin-bottom:8px">Live Log</div>
     <div class="log-panel" id="log-gmail_monitor"></div>
+
+    <div style="margin-top:24px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="card-title" style="margin:0">Recruiter Emails</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadGmailContacts()">↻ Refresh</button>
+      </div>
+      <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border)">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:var(--surface2);color:var(--text-muted);text-align:left">
+              <th style="padding:10px 14px;font-weight:600;white-space:nowrap">Date</th>
+              <th style="padding:10px 14px;font-weight:600">Recruiter</th>
+              <th style="padding:10px 14px;font-weight:600">Email</th>
+              <th style="padding:10px 14px;font-weight:600">Company</th>
+              <th style="padding:10px 14px;font-weight:600">Subject / Role</th>
+              <th style="padding:10px 14px;font-weight:600">Status</th>
+            </tr>
+          </thead>
+          <tbody id="gmail-contacts-tbody">
+            <tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted)">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- LINKEDIN OUTREACH -->
@@ -251,6 +275,32 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
     </div>
     <div class="card-title" style="margin-bottom:8px">Live Log</div>
     <div class="log-panel" id="log-linkedin_outreach"></div>
+
+    <!-- Recruiters Table -->
+    <div style="margin-top:24px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="card-title" style="margin:0">Recruiter Outreach</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadRecruiters()">↻ Refresh</button>
+      </div>
+      <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border)">
+        <table id="recruiters-table" style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:var(--surface2);color:var(--text-muted);text-align:left">
+              <th style="padding:10px 14px;font-weight:600;white-space:nowrap">Date</th>
+              <th style="padding:10px 14px;font-weight:600">Recruiter</th>
+              <th style="padding:10px 14px;font-weight:600">Email</th>
+              <th style="padding:10px 14px;font-weight:600">Company</th>
+              <th style="padding:10px 14px;font-weight:600">Role</th>
+              <th style="padding:10px 14px;font-weight:600">Location</th>
+              <th style="padding:10px 14px;font-weight:600">Status</th>
+            </tr>
+          </thead>
+          <tbody id="recruiters-tbody">
+            <tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted)">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- DICE APPLY -->
@@ -342,6 +392,30 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
     </div>
     <div class="card-title" style="margin-bottom:8px">Live Log</div>
     <div class="log-panel" id="log-companies_apply"></div>
+
+    <div style="margin-top:24px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="card-title" style="margin:0">Applied Jobs</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadCompanyJobs()">↻ Refresh</button>
+      </div>
+      <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border)">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:var(--surface2);color:var(--text-muted);text-align:left">
+              <th style="padding:10px 14px;font-weight:600;white-space:nowrap">Date</th>
+              <th style="padding:10px 14px;font-weight:600">Company</th>
+              <th style="padding:10px 14px;font-weight:600">Role</th>
+              <th style="padding:10px 14px;font-weight:600">Location</th>
+              <th style="padding:10px 14px;font-weight:600">ATS</th>
+              <th style="padding:10px 14px;font-weight:600">Status</th>
+            </tr>
+          </thead>
+          <tbody id="company-jobs-tbody">
+            <tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted)">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- PROFILE -->
@@ -543,8 +617,10 @@ function switchTab(name) {
   });
   if (name !== 'home' && name !== 'profile') connectStream(name);
   if (name === 'profile') loadProfile();
-  if (name === 'companies_apply') loadCompanies();
+  if (name === 'companies_apply') { loadCompanies(); loadCompanyJobs(); }
   if (name === 'dice_apply') loadJobs();
+  if (name === 'linkedin_outreach') loadRecruiters();
+  if (name === 'gmail_monitor') loadGmailContacts();
 }
 
 // ── SSE log streams ────────────────────────────────────────────────────────────
@@ -705,6 +781,81 @@ function connectGmail() {
 }
 
 // ── Companies list ─────────────────────────────────────────────────────────────
+function loadGmailContacts() {
+  fetch('/api/recruiters?src=gmail&limit=500').then(r => r.json()).then(rows => {
+    const tbody = document.getElementById('gmail-contacts-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted)">No recruiter emails yet</td></tr>';
+      return;
+    }
+    const statusColor = s => {
+      if (s === 'interview') return '#a78bfa';
+      if (s === 'replied')   return '#4ade80';
+      if (s === 'contacted') return '#60a5fa';
+      return 'var(--text-muted)';
+    };
+    tbody.innerHTML = rows.map(r => `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)}</td>
+      <td style="padding:9px 14px;font-weight:500">${escHtml(r.name || '—')}</td>
+      <td style="padding:9px 14px;color:var(--text-muted);font-size:12px">${escHtml(r.email)}</td>
+      <td style="padding:9px 14px">${escHtml(r.company || '—')}</td>
+      <td style="padding:9px 14px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(r.title || '—')}</td>
+      <td style="padding:9px 14px"><span style="color:${statusColor(r.status)};font-weight:600;text-transform:capitalize">${escHtml(r.status)}</span></td>
+    </tr>`).join('');
+  });
+}
+
+function loadCompanyJobs() {
+  fetch('/api/company-jobs?limit=500').then(r => r.json()).then(rows => {
+    const tbody = document.getElementById('company-jobs-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-muted)">No applications yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const isErr = r.status.startsWith('error');
+      const statusColor = isErr ? '#f87171' : '#4ade80';
+      const statusLabel = isErr ? r.status.replace(/^error:\s*/i, '') : 'Applied';
+      const titleCell = r.url
+        ? `<a href="${escHtml(r.url)}" target="_blank" style="color:var(--accent);text-decoration:none">${escHtml(r.title)}</a>`
+        : escHtml(r.title);
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)} <span style="opacity:.6">${escHtml(r.time)}</span></td>
+        <td style="padding:9px 14px;font-weight:500">${escHtml(r.company || '—')}</td>
+        <td style="padding:9px 14px">${titleCell}</td>
+        <td style="padding:9px 14px;color:var(--text-muted)">${escHtml(r.location || '—')}</td>
+        <td style="padding:9px 14px;color:var(--text-muted);font-size:12px;text-transform:uppercase">${escHtml(r.ats || '—')}</td>
+        <td style="padding:9px 14px"><span style="color:${statusColor};font-weight:600">${escHtml(statusLabel)}</span></td>
+      </tr>`;
+    }).join('');
+  });
+}
+
+function loadRecruiters() {
+  fetch('/api/recruiters?limit=500').then(r => r.json()).then(rows => {
+    const tbody = document.getElementById('recruiters-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted)">No outreach yet</td></tr>';
+      return;
+    }
+    const statusColor = s => {
+      if (s === 'interview') return '#a78bfa';
+      if (s === 'replied')   return '#4ade80';
+      if (s === 'contacted') return '#60a5fa';
+      return 'var(--text-muted)';
+    };
+    tbody.innerHTML = rows.map(r => `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)}</td>
+      <td style="padding:9px 14px;font-weight:500">${escHtml(r.name || '—')}</td>
+      <td style="padding:9px 14px;color:var(--text-muted);font-size:12px">${escHtml(r.email)}</td>
+      <td style="padding:9px 14px">${escHtml(r.company || '—')}</td>
+      <td style="padding:9px 14px">${escHtml(r.title || '—')}</td>
+      <td style="padding:9px 14px;color:var(--text-muted)">${escHtml(r.location || '—')}</td>
+      <td style="padding:9px 14px"><span style="color:${statusColor(r.status)};font-weight:600;text-transform:capitalize">${escHtml(r.status)}</span></td>
+    </tr>`).join('');
+  });
+}
+
 function loadJobs() {
   fetch('/api/jobs?limit=200').then(r => r.json()).then(rows => {
     const tbody = document.getElementById('jobs-tbody');
@@ -794,7 +945,10 @@ setInterval(loadStats,    30000);
 setInterval(loadActivity, 10000);
 setInterval(loadErrors,   10000);
 setInterval(() => {
-  if (document.getElementById('sec-dice_apply').classList.contains('active')) loadJobs();
+  if (document.getElementById('sec-dice_apply').classList.contains('active'))        loadJobs();
+  if (document.getElementById('sec-linkedin_outreach').classList.contains('active')) loadRecruiters();
+  if (document.getElementById('sec-gmail_monitor').classList.contains('active'))     loadGmailContacts();
+  if (document.getElementById('sec-companies_apply').classList.contains('active'))   loadCompanyJobs();
 }, 8000);
 </script>
 </body>

@@ -38,6 +38,7 @@ FIELDS = [
     "name",
     "company",
     "title",
+    "location",
     "source",           # linkedin | gmail_inbox | gmail_promotions | gmail_social | gmail_updates
     "first_seen",
     "last_seen",
@@ -121,13 +122,14 @@ class RecruiterDB:
 
     def upsert(
         self,
-        email:   str,
-        name:    str = "",
-        company: str = "",
-        title:   str = "",
-        source:  str = "",
-        status:  str = "",
-        notes:   str = "",
+        email:    str,
+        name:     str = "",
+        company:  str = "",
+        title:    str = "",
+        location: str = "",
+        source:   str = "",
+        status:   str = "",
+        notes:    str = "",
     ):
         """
         Insert a new recruiter or update an existing one.
@@ -158,6 +160,8 @@ class RecruiterDB:
                     rec["company"] = company
                 if title:
                     rec["title"] = title
+                if location and not rec.get("location"):
+                    rec["location"] = location
                 # Accumulate sources without duplicates
                 if source:
                     existing_sources = [s.strip() for s in rec.get("source", "").split(",") if s.strip()]
@@ -176,6 +180,7 @@ class RecruiterDB:
                     "name":            name,
                     "company":         company,
                     "title":           title,
+                    "location":        location,
                     "source":          source,
                     "first_seen":      now,
                     "last_seen":       now,

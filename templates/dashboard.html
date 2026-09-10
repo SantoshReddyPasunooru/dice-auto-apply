@@ -883,27 +883,31 @@ function loadCompanyJobs() {
 }
 
 function loadRecruiters() {
-  fetch('/api/recruiters?limit=500').then(r => r.json()).then(rows => {
+  fetch('/api/recruiters?src=linkedin&limit=500').then(r => r.json()).then(rows => {
     const tbody = document.getElementById('recruiters-tbody');
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted)">No outreach yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted)">No LinkedIn outreach yet</td></tr>';
       return;
     }
-    const statusColor = s => {
-      if (s === 'interview') return '#a78bfa';
-      if (s === 'replied')   return '#4ade80';
-      if (s === 'contacted') return '#60a5fa';
-      return 'var(--text-muted)';
+    const statusMeta = s => {
+      if (s === 'interview') return { label: 'Interview',  color: '#a78bfa' };
+      if (s === 'replied')   return { label: 'Replied',    color: '#4ade80' };
+      if (s === 'contacted') return { label: 'Email Sent', color: '#60a5fa' };
+      if (s === 'rtr')       return { label: 'RTR',        color: '#fb923c' };
+      return                        { label: s,            color: 'var(--text-muted)' };
     };
-    tbody.innerHTML = rows.map(r => `<tr style="border-top:1px solid var(--border)">
-      <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)}</td>
-      <td style="padding:9px 14px;font-weight:500">${escHtml(r.name || '—')}</td>
-      <td style="padding:9px 14px;color:var(--text-muted);font-size:12px">${escHtml(r.email)}</td>
-      <td style="padding:9px 14px">${escHtml(r.company || '—')}</td>
-      <td style="padding:9px 14px">${escHtml(r.title || '—')}</td>
-      <td style="padding:9px 14px;color:var(--text-muted)">${escHtml(r.location || '—')}</td>
-      <td style="padding:9px 14px"><span style="color:${statusColor(r.status)};font-weight:600;text-transform:capitalize">${escHtml(r.status)}</span></td>
-    </tr>`).join('');
+    tbody.innerHTML = rows.map(r => {
+      const { label, color } = statusMeta(r.status);
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)}</td>
+        <td style="padding:9px 14px;font-weight:500">${escHtml(r.name || '—')}</td>
+        <td style="padding:9px 14px;color:var(--text-muted);font-size:12px">${escHtml(r.email)}</td>
+        <td style="padding:9px 14px">${escHtml(r.company || '—')}</td>
+        <td style="padding:9px 14px">${escHtml(r.title || '—')}</td>
+        <td style="padding:9px 14px;color:var(--text-muted)">${escHtml(r.location || '—')}</td>
+        <td style="padding:9px 14px"><span style="color:${color};font-weight:600">${escHtml(label)}</span></td>
+      </tr>`;
+    }).join('');
   });
 }
 

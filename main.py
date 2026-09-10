@@ -1861,12 +1861,53 @@ def prompt_settings() -> dict:
     }
 
 
-async def run():
+async def run(profile_email: str = "", query: str | None = None,
+              posted_date: str | None = None, easy_apply: bool | None = None):
     caps = detect_capabilities()
     print_capabilities(caps)
 
-    # Interactive setup prompt
-    settings = prompt_settings()
+    if profile_email:
+        # Non-interactive mode: build settings from CLI args + env defaults
+        from urllib.parse import quote_plus
+        _q  = query       if query       is not None else SEARCH_QUERY
+        _pd = posted_date if posted_date is not None else POSTED_DATE
+        _ea = easy_apply  if easy_apply  is not None else EASY_APPLY
+
+        profiles_dir = Path.home()
+        existing = sorted(
+            p for p in profiles_dir.iterdir()
+            if p.is_dir() and p.name.startswith(".dice-")
+        )
+        session_dir = next(
+            (p for p in existing
+             if (p / ".profile_email").exists()
+             and (p / ".profile_email").read_text().strip().lower() == profile_email.lower()),
+            existing[0] if existing else Path.home() / ".dice-playwright-profile"
+        )
+
+        url = f"https://www.dice.com/jobs?q={quote_plus(_q)}&pageSize=20"
+        if _ea:
+            url += "&filters.easyApply=true"
+        if _pd:
+            url += f"&filters.postedDate={_pd}"
+
+        date_options = {"ONE":"Today","THREE":"Last 3 days","SEVEN":"Last 7 days",
+                        "THIRTY":"Last 30 days","":"Any time"}
+        settings = {
+            "session_dir":   session_dir,
+            "profile_email": profile_email,
+            "query":         _q,
+            "posted_date":   _pd,
+            "easy_apply":    _ea,
+            "search_url":    url,
+            "date_label":    date_options.get(_pd, "Any time"),
+            "easy_label":    "Easy Apply only" if _ea else "All jobs",
+        }
+        print(f"  [non-interactive] Profile: {profile_email}  Query: {_q}")
+    else:
+        # Interactive setup prompt
+        settings = prompt_settings()
+
     search_url    = settings["search_url"]
     session_dir   = settings["session_dir"]
     date_label    = settings["date_label"]
@@ -2057,8 +2098,22 @@ async def login_only():
 
 
 if __name__ == "__main__":
-    import sys
-    if "--login" in sys.argv:
+    import argparse, sys
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--login",   action="store_true")
+    ap.add_argument("--profile", default="")
+    ap.add_argument("--query",   default="")
+    ap.add_argument("--date",    default="")
+    ap.add_argument("--easy-apply", dest="easy_apply", default=None)
+    args, _ = ap.parse_known_args()
+
+    if args.login:
         asyncio.run(login_only())
+    elif args.profile:
+        asyncio.run(run(profile_email=args.profile,
+                        query=args.query or None,
+                        posted_date=args.date or None,
+                        easy_apply=(args.easy_apply.lower() in ("true","yes","1")
+                                    if args.easy_apply is not None else None)))
     else:
         asyncio.run(run())

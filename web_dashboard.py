@@ -293,7 +293,13 @@ def api_run(feature):
     elif feature == "linkedin_outreach":
         cmd = [sys.executable, "linkedin_outreach.py", "--profile", PROFILE_EMAIL]
     elif feature == "dice_apply":
-        cmd = [sys.executable, "main.py"]
+        cmd = [sys.executable, "main.py", "--profile", PROFILE_EMAIL]
+        if body.get("query"):
+            cmd += ["--query", body["query"]]
+        if body.get("date"):
+            cmd += ["--date", body["date"]]
+        if body.get("easy_apply") is not None:
+            cmd += ["--easy-apply", str(body["easy_apply"]).lower()]
     elif feature == "companies_apply":
         company = body.get("company", "")
         if not company:

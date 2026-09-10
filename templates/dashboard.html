@@ -256,8 +256,34 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
   <!-- DICE APPLY -->
   <div id="sec-dice_apply" class="section">
     <div class="page-title">🎲 Dice Apply <span id="badge-dice_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Search Settings</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:end">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Job Title / Keywords</label>
+          <input id="dice-query" type="text" placeholder="gen ai" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Posted Date</label>
+          <select id="dice-date" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+            <option value="ONE">Today (24h)</option>
+            <option value="THREE">Last 3 days</option>
+            <option value="SEVEN">Last 7 days</option>
+            <option value="THIRTY">Last 30 days</option>
+            <option value="">Any time</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Easy Apply</label>
+          <select id="dice-easy" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+            <option value="true">Easy Apply Only</option>
+            <option value="false">All Jobs</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <div class="ctrl-row">
-      <button id="btn-dice_apply" class="btn btn-primary" onclick="startFeature('dice_apply')">▶ Start</button>
+      <button id="btn-dice_apply" class="btn btn-primary" onclick="startDice()">▶ Start</button>
       <button id="stop-dice_apply" class="btn btn-danger" onclick="stopFeature('dice_apply')" style="display:none">■ Stop</button>
     </div>
     <div class="card" style="margin-bottom:16px">
@@ -632,6 +658,15 @@ function startFeature(feature, extra) {
 
 function stopFeature(feature) {
   fetch('/api/stop/' + feature, {method:'POST'}).then(() => loadStatus());
+}
+
+function startDice() {
+  const extra = {
+    query:      document.getElementById('dice-query').value.trim() || undefined,
+    date:       document.getElementById('dice-date').value || undefined,
+    easy_apply: document.getElementById('dice-easy').value === 'true',
+  };
+  startFeature('dice_apply', extra);
 }
 
 function startCompanies() {

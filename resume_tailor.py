@@ -437,13 +437,21 @@ def _cached_path(master_path: Path, jd_text: str) -> Path:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def tailor_resume(master_path: Path, jd_text: str, force: bool = False) -> Path:
+def tailor_resume(master_path: Path, jd_text: str, force: bool = False,
+                  output_dir: Path | None = None) -> Path:
     """
     Tailor master_path DOCX to jd_text. Returns path to tailored DOCX.
+    If output_dir is given the file is saved there; otherwise uses CACHE_DIR.
     Results are cached — same master + same JD always returns the same file.
     Set force=True to bypass cache and re-tailor.
     """
-    out_path = _cached_path(master_path, jd_text)
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        key      = _cache_key(master_path, jd_text)
+        out_path = output_dir / f"{master_path.stem}_tailored_{key}.docx"
+    else:
+        out_path = _cached_path(master_path, jd_text)
 
     if out_path.exists() and not force:
         print(f"  [Tailor] Cache hit → {out_path.name}")

@@ -922,11 +922,12 @@ def get_resume(profile: dict, email: str, job_title: str = "",
         best = best_path if best_score > 0 else (default_path or all_resumes[0])
 
         # Tailor the DOCX to the JD if possible
+        resume_folder = Path(folder).expanduser() if folder else None
         if best and best.suffix.lower() == ".docx" and (jd_text or job_title):
             try:
                 from resume_tailor import tailor_resume
                 context = jd_text or f"{job_title} {company}"
-                return tailor_resume(best, context)
+                return tailor_resume(best, context, output_dir=resume_folder)
             except Exception as e:
                 print(f"  [Tailor] Error: {e} — using untailored resume")
 

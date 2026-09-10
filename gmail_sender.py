@@ -212,7 +212,7 @@ class GmailSender:
             return master
         try:
             from resume_tailor import tailor_resume
-            return tailor_resume(master, jd_text)
+            return tailor_resume(master, jd_text, output_dir=self._resume_folder)
         except Exception as e:
             print(f"  [Tailor] Error — falling back to untailored resume: {e}")
             return master

@@ -160,6 +160,36 @@ def api_status():
     return jsonify({"gmail": gmail, "dice": dice, "ollama": ollama, "processes": procs})
 
 
+@app.route("/api/jobs")
+def api_jobs():
+    """Return applied jobs for the current profile, most-recent first."""
+    per_csv = _profile_dir(PROFILE_EMAIL) / "applied_jobs.csv"
+    csv_path = per_csv if per_csv.exists() else APPLIED_CSV
+    rows = []
+    if csv_path.exists():
+        try:
+            with open(csv_path) as f:
+                for row in csv.DictReader(f):
+                    s = row.get("status", "")
+                    if "skipped" in s:
+                        continue
+                    ts = row.get("timestamp", "")
+                    rows.append({
+                        "ts":      ts,
+                        "date":    ts[:10] if ts else "",
+                        "time":    ts[11:16] if len(ts) > 10 else "",
+                        "title":   row.get("job_title", ""),
+                        "company": row.get("company", ""),
+                        "url":     row.get("job_url", ""),
+                        "status":  s,
+                    })
+        except Exception:
+            pass
+    rows.reverse()
+    limit = request.args.get("limit", 200, type=int)
+    return jsonify(rows[:limit])
+
+
 @app.route("/api/stats")
 def api_stats():
     stats = dict(dice_applied=0, dice_errors=0,

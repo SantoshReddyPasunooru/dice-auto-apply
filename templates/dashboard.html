@@ -296,6 +296,29 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
     </div>
     <div class="card-title" style="margin-bottom:8px">Live Log</div>
     <div class="log-panel" id="log-dice_apply"></div>
+
+    <!-- Jobs Table -->
+    <div style="margin-top:24px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="card-title" style="margin:0">Applied Jobs</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadJobs()">↻ Refresh</button>
+      </div>
+      <div style="overflow-x:auto;border-radius:10px;border:1px solid var(--border)">
+        <table id="jobs-table" style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:var(--surface2);color:var(--text-muted);text-align:left">
+              <th style="padding:10px 14px;font-weight:600;white-space:nowrap">Date</th>
+              <th style="padding:10px 14px;font-weight:600">Role</th>
+              <th style="padding:10px 14px;font-weight:600">Company</th>
+              <th style="padding:10px 14px;font-weight:600">Status</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-tbody">
+            <tr><td colspan="4" style="padding:20px;text-align:center;color:var(--text-muted)">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- COMPANIES APPLY -->
@@ -521,6 +544,7 @@ function switchTab(name) {
   if (name !== 'home' && name !== 'profile') connectStream(name);
   if (name === 'profile') loadProfile();
   if (name === 'companies_apply') loadCompanies();
+  if (name === 'dice_apply') loadJobs();
 }
 
 // ── SSE log streams ────────────────────────────────────────────────────────────
@@ -681,6 +705,30 @@ function connectGmail() {
 }
 
 // ── Companies list ─────────────────────────────────────────────────────────────
+function loadJobs() {
+  fetch('/api/jobs?limit=200').then(r => r.json()).then(rows => {
+    const tbody = document.getElementById('jobs-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--text-muted)">No jobs yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(r => {
+      const isErr = r.status.startsWith('error');
+      const statusColor = isErr ? '#f87171' : '#4ade80';
+      const statusLabel = isErr ? r.status.replace(/^error:\s*/i, '') : 'Applied';
+      const titleCell = r.url
+        ? `<a href="${escHtml(r.url)}" target="_blank" style="color:var(--accent);text-decoration:none">${escHtml(r.title)}</a>`
+        : escHtml(r.title);
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)} <span style="opacity:.6">${escHtml(r.time)}</span></td>
+        <td style="padding:9px 14px">${titleCell}</td>
+        <td style="padding:9px 14px;color:var(--text-muted)">${escHtml(r.company || '—')}</td>
+        <td style="padding:9px 14px"><span style="color:${statusColor};font-weight:600">${escHtml(statusLabel)}</span></td>
+      </tr>`;
+    }).join('');
+  });
+}
+
 function loadCompanies() {
   fetch('/api/companies').then(r => r.json()).then(list => {
     const sel = document.getElementById('company-select');
@@ -745,6 +793,9 @@ setInterval(loadStatus,   4000);
 setInterval(loadStats,    30000);
 setInterval(loadActivity, 10000);
 setInterval(loadErrors,   10000);
+setInterval(() => {
+  if (document.getElementById('sec-dice_apply').classList.contains('active')) loadJobs();
+}, 8000);
 </script>
 </body>
 </html>

@@ -203,8 +203,11 @@ def api_recruiters():
                         # default: linkedin + engaged gmail_inbox
                         if not is_linkedin and not (is_inbox and status in ("contacted", "replied", "interview", "rtr", "offer")):
                             continue
+                    last_seen = row.get("last_seen", "")
                     rows.append({
-                        "date":     row.get("last_seen", "")[:10],
+                        "ts":       last_seen,
+                        "date":     last_seen[:10],
+                        "time":     last_seen[11:16] if len(last_seen) > 10 else "",
                         "name":     row.get("name", ""),
                         "email":    row.get("email", ""),
                         "company":  row.get("company", ""),
@@ -216,7 +219,7 @@ def api_recruiters():
                     })
         except Exception:
             pass
-    rows.sort(key=lambda r: r["date"], reverse=True)
+    rows.sort(key=lambda r: r["ts"], reverse=True)
     limit = request.args.get("limit", 500, type=int)
     return jsonify(rows[:limit])
 

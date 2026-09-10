@@ -899,7 +899,7 @@ function loadRecruiters() {
     tbody.innerHTML = rows.map(r => {
       const { label, color } = statusMeta(r.status);
       return `<tr style="border-top:1px solid var(--border)">
-        <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)}</td>
+        <td style="padding:9px 14px;white-space:nowrap;color:var(--text-muted)">${escHtml(r.date)} <span style="opacity:.6">${escHtml(r.time)}</span></td>
         <td style="padding:9px 14px;font-weight:500">${escHtml(r.name || '—')}</td>
         <td style="padding:9px 14px;color:var(--text-muted);font-size:12px">${escHtml(r.email)}</td>
         <td style="padding:9px 14px">${escHtml(r.company || '—')}</td>
@@ -1004,7 +1004,7 @@ setInterval(() => {
   if (document.getElementById('sec-linkedin_outreach').classList.contains('active')) loadRecruiters();
   if (document.getElementById('sec-gmail_monitor').classList.contains('active'))     loadGmailContacts();
   if (document.getElementById('sec-companies_apply').classList.contains('active'))   loadCompanyJobs();
-}, 8000);
+}, 3000);
 </script>
 </body>
 </html>

@@ -28,13 +28,18 @@ def early_career_rejection_reason(
     max_required_years: int = 4,
     allowed_levels: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> str | None:
-    selected_levels = set(allowed_levels or ("intern", "new_grad", "early_career", "entry", "mid"))
-    if "junior" in selected_levels:
-        selected_levels.update(("new_grad", "early_career", "entry"))
+    if not title:
+        return None
 
-    for level, pattern in _TITLE_LEVEL_PATTERNS:
-        if pattern.search(title) and level not in selected_levels:
-            return f"{level.replace('_', ' ')} level not selected"
+    # When no level filter is requested (allowed_levels is None), skip level-based rejection
+    # and only apply the years-experience check.
+    if allowed_levels is not None:
+        selected_levels = set(allowed_levels)
+        if "junior" in selected_levels:
+            selected_levels.update(("new_grad", "early_career", "entry"))
+        for level, pattern in _TITLE_LEVEL_PATTERNS:
+            if pattern.search(title) and level not in selected_levels:
+                return f"{level.replace('_', ' ')} level not selected"
 
     searchable_text = f"{title}\n{description}"
     for match in _YEARS_RE.finditer(searchable_text):

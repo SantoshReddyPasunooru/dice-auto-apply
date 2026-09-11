@@ -103,7 +103,7 @@ async def fill_external(page: Page, profile: dict, resume: Path | None, title: s
     url = page.url.lower()
     if "myworkdayjobs.com" in url:
         from company_apply.workday import _fill_workday
-        return await _fill_workday(page, profile, profile["email"], resume, title, new_pages=[])
+        return await _fill_workday(page, profile, profile["email"], resume, "LinkedIn external", new_pages=[])
     if "greenhouse.io" in url:
         from company_apply.greenhouse import _fill_greenhouse
         return await _fill_greenhouse(page, profile, profile["email"], resume, title, "LinkedIn")

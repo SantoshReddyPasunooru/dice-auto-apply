@@ -293,15 +293,18 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
             await file_inputs.first.set_input_files(str(resume))
 
     name_parts = profile.get("name", "").split()
+    _loc_parts = [p.strip() for p in profile.get("location", "").split(",")]
+    _city_val  = profile.get("city") or (_loc_parts[0] if _loc_parts else "")
+    _state_val = profile.get("state") or (_loc_parts[1] if len(_loc_parts) > 1 else "")
     for field, value in {
         "email": profile.get("email", ""),
         "phone": profile.get("phone", ""),
         "first name": name_parts[0] if name_parts else "",
         "last name": " ".join(name_parts[1:]),
         "address": profile.get("address_line1", ""),
-        "city": profile.get("city", "Fairborn"),
-        "state": profile.get("state", "OH"),
-        "zip": profile.get("postal_code", "45324"),
+        "city": _city_val,
+        "state": _state_val,
+        "zip": profile.get("postal_code", ""),
     }.items():
         if not value:
             continue

@@ -415,10 +415,25 @@ async def _wd_my_information(page: Page, profile: dict, email: str, resume: Opti
     except Exception:
         pass
 
-    # State/region dropdown
+    # State/region dropdown — expand common abbreviations to full names for Workday dropdowns
+    _US_STATES = {
+        "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+        "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+        "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+        "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+        "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+        "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+        "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+        "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+        "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+        "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+        "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+        "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+        "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
+    }
     if "," in loc:
         state = loc.split(",")[1].strip()
-        state = {"OH": "Ohio"}.get(state.upper(), state)
+        state = _US_STATES.get(state.upper(), state)
         await _wd_dropdown(page, "countryRegion", state)
 
     await _wd_next(page)
@@ -439,8 +454,8 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     grad_yr = profile.get("graduation_year") or "2026"
     start_month = profile.get("work_start_month") or "08"
     start_yr = profile.get("work_start_year") or "2023"
-    end_month = profile.get("work_end_month") or "12"
-    end_yr = profile.get("work_end_year") or "2024"
+    end_month = profile.get("work_end_month")   # None = not set; skip end date fill if missing
+    end_yr    = profile.get("work_end_year")     # None = not set; skip end date fill if missing
     currently_raw = profile.get("currently_employed", False)
     currently_employed = currently_raw is True or str(currently_raw).lower() in ("true", "yes", "1")
 
@@ -476,15 +491,19 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     # DOM order with checkbox unchecked: [WE-From-mo, WE-To-mo,   WE-From-yr,  WE-To-yr, Edu-From-yr, Edu-To-yr]
     try:
         await _wd_fill_date(page, "startDate", start_month, start_yr)
-        if not currently_employed:
+        if not currently_employed and end_month and end_yr:
             await _wd_fill_date(page, "endDate", end_month, end_yr)
         first_year = page.locator("[data-automation-id='formField-firstYearAttended'] [data-automation-id='dateSectionYear-input']").first
         last_year = page.locator("[data-automation-id='formField-lastYearAttended'] [data-automation-id='dateSectionYear-input']").first
-        if await first_year.count() > 0:
-            await first_year.fill(str(int(grad_yr) - 1))
-        if await last_year.count() > 0:
-            await last_year.fill(grad_yr)
-            await last_year.press("Tab")
+        try:
+            grad_yr_int = int(re.sub(r"[^\d]", "", str(grad_yr))[:4])
+            if await first_year.count() > 0:
+                await first_year.fill(str(grad_yr_int - 1))
+            if await last_year.count() > 0:
+                await last_year.fill(str(grad_yr_int))
+                await last_year.press("Tab")
+        except (ValueError, TypeError):
+            pass
         print(f"          [Exp] Work dates: {start_month}/{start_yr} to {end_month}/{end_yr}", flush=True)
     except Exception as _e:
         print(f"          [Exp] Date fill error: {_e}", flush=True)
@@ -524,7 +543,8 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
 
     # Degree — 4 strategies tried in order:
     _deg_filled = False
-    _deg_kw = "master" if "master" in degree.lower() else degree.lower().split()[0]
+    _degree_words = degree.lower().split()
+    _deg_kw = "master" if "master" in degree.lower() else (_degree_words[0] if _degree_words else "bachelor")
 
     # One-shot DOM inspection to understand the degree field structure
     try:

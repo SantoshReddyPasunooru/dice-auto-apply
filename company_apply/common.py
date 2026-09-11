@@ -193,6 +193,16 @@ def save_company_db(db: dict):
     COMPANY_DB_PATH.write_text(json.dumps(db, indent=2))
 
 
+def applicable_companies(db: dict) -> dict:
+    """Return only companies with status='active' (or no status field — active by default)."""
+    return {k: v for k, v in db.items() if v.get("status", "active") == "active"}
+
+
+def needtofix_companies(db: dict) -> dict:
+    """Return companies flagged status='needs_fix'."""
+    return {k: v for k, v in db.items() if v.get("status") == "needs_fix"}
+
+
 def find_company(query: str, db: dict) -> Optional[dict]:
     q = query.lower().strip()
     # Exact key

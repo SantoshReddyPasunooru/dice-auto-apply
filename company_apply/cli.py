@@ -39,6 +39,8 @@ from .common import (
     load_company_db,
     load_saved_filters,
     log_applied,
+    applicable_companies,
+    needtofix_companies,
     RESUMES_JSON,
     save_filters,
     stripe_list_jobs,
@@ -570,13 +572,28 @@ def main():
         if not db:
             print("Company DB is empty. Run: python company_apply.py --add")
             return
-        print(f"\n  {'Company':<25} {'ATS':<14} {'Slug':<22} Careers URL")
-        print(f"  {'─'*25} {'─'*14} {'─'*22} {'─'*40}")
-        for _, rec in sorted(db.items(), key=lambda x: x[1]["name"].lower()):
+        active  = applicable_companies(db)
+        broken  = needtofix_companies(db)
+        hdr = f"  {'Company':<25} {'ATS':<14} {'Slug':<22} Careers URL"
+        sep = f"  {'─'*25} {'─'*14} {'─'*22} {'─'*40}"
+        print(f"\n  Applicable companies ({len(active)}):")
+        print(hdr); print(sep)
+        for _, rec in sorted(active.items(), key=lambda x: x[1]["name"].lower()):
             print(
                 f"  {rec['name']:<25} {rec['ats']:<14} "
                 f"{rec.get('slug',''):<22} {rec.get('careers_url','')}"
             )
+        if broken:
+            print(f"\n  Needs-fix companies ({len(broken)}) — skipped during batch apply:")
+            print(hdr); print(sep)
+            for _, rec in sorted(broken.items(), key=lambda x: x[1]["name"].lower()):
+                note = rec.get("fix_note", "")
+                print(
+                    f"  {rec['name']:<25} {rec['ats']:<14} "
+                    f"{rec.get('slug',''):<22} {rec.get('careers_url','')}"
+                )
+                if note:
+                    print(f"    ↳ {note}")
         print()
         return
 

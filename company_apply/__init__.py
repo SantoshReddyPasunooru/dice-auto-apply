@@ -14,6 +14,7 @@ ATS automation split into per-system modules:
 from .common import *          # noqa: F401, F403
 from .common import (          # noqa: F401  private helpers tests import directly
     _is_canada_location, _is_us_location,
+    applicable_companies, needtofix_companies,
 )
 from .greenhouse import *      # noqa: F401, F403
 from .workday import *         # noqa: F401, F403

@@ -193,6 +193,16 @@ def save_company_db(db: dict):
     COMPANY_DB_PATH.write_text(json.dumps(db, indent=2))
 
 
+def applicable_companies(db: dict) -> dict:
+    """Return only companies with status='active' (or no status field — active by default)."""
+    return {k: v for k, v in db.items() if v.get("status", "active") == "active"}
+
+
+def needtofix_companies(db: dict) -> dict:
+    """Return companies flagged status='needs_fix'."""
+    return {k: v for k, v in db.items() if v.get("status") == "needs_fix"}
+
+
 def find_company(query: str, db: dict) -> Optional[dict]:
     q = query.lower().strip()
     # Exact key
@@ -8049,13 +8059,28 @@ def main():
         if not db:
             print("Company DB is empty. Run: python company_apply.py --add")
             return
-        print(f"\n  {'Company':<25} {'ATS':<14} {'Slug':<22} Careers URL")
-        print(f"  {'─'*25} {'─'*14} {'─'*22} {'─'*40}")
-        for _, rec in sorted(db.items(), key=lambda x: x[1]["name"].lower()):
+        active = applicable_companies(db)
+        broken = needtofix_companies(db)
+        hdr = f"  {'Company':<25} {'ATS':<14} {'Slug':<22} Careers URL"
+        sep = f"  {'─'*25} {'─'*14} {'─'*22} {'─'*40}"
+        print(f"\n  Applicable companies ({len(active)}):")
+        print(hdr); print(sep)
+        for _, rec in sorted(active.items(), key=lambda x: x[1]["name"].lower()):
             print(
                 f"  {rec['name']:<25} {rec['ats']:<14} "
                 f"{rec.get('slug',''):<22} {rec.get('careers_url','')}"
             )
+        if broken:
+            print(f"\n  Needs-fix companies ({len(broken)}) — skipped during batch apply:")
+            print(hdr); print(sep)
+            for _, rec in sorted(broken.items(), key=lambda x: x[1]["name"].lower()):
+                note = rec.get("fix_note", "")
+                print(
+                    f"  {rec['name']:<25} {rec['ats']:<14} "
+                    f"{rec.get('slug',''):<22} {rec.get('careers_url','')}"
+                )
+                if note:
+                    print(f"    ↳ {note}")
         print()
         return
 

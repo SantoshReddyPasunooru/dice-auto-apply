@@ -6021,20 +6021,37 @@ async def _wd_voluntary(page: Page, profile: dict = None) -> None:
         except Exception:
             pass
         await btn.click(force=True)
-        await asyncio.sleep(0.9)
-        # Pick the right option from dropdown
+        await asyncio.sleep(1.2)   # give Workday time to render the dropdown
+        # Pick the right option — try multiple selectors covering all Workday variants
         picked = False
-        for opt_sel in ("[data-automation-id='promptOption']", "[role='option']", "li[tabindex]"):
+        _opt_sels = (
+            "[data-automation-id='promptOption']",
+            "[role='option']",
+            "li[tabindex]",
+            "[role='listbox'] li",
+            "[data-automation-id='dropdownOption']",
+            "ul[role='listbox'] li",
+            "div[role='option']",
+        )
+        for opt_sel in _opt_sels:
             opts = await page.locator(opt_sel).all()
+            if not opts:
+                continue
             first_real = None
             for opt in opts:
                 try:
                     t = (await opt.inner_text()).strip().lower()
-                    if not t:
+                    if not t or t in ("select one", "-- select --"):
                         continue
                     if skip_kw and skip_kw in t:
                         continue
-                    if any(w in t for w in kws):
+                    # Exact-word match preferred (avoid "female" matching keyword "male")
+                    exact_match = any(
+                        f" {w} " in f" {t} " or t == w or t.startswith(w + " ") or t.endswith(" " + w)
+                        for w in kws
+                    )
+                    substr_match = any(w in t for w in kws)
+                    if exact_match or substr_match:
                         await opt.click(force=True)
                         picked = True
                         break
@@ -6735,6 +6752,48 @@ async def _wd_submit(page: Page) -> str:
     except Exception:
         pass
 
+    # Recovery: if still on error page, check for CC-305 disability radio not selected
+    try:
+        has_error = await page.locator("button:has-text('Errors Found')").count() > 0
+        has_cc305 = (
+            await page.locator("text='CC-305'").count() > 0
+            or await page.locator("[data-automation-id='formField-dateSignedOn']").count() > 0
+        )
+        has_radio = await page.locator("input[type='radio']").count() > 0
+        if has_error and (has_cc305 or has_radio):
+            print(f"          [Submit] Error page — attempting CC-305 disability radio recovery", flush=True)
+            _rec_kws = ("i don't wish", "i do not wish", "prefer not", "no disability",
+                        "i do not have", "choose not", "decline", "i am not")
+            radios = await page.locator("input[type='radio']").all()
+            for radio in radios:
+                try:
+                    rid = await radio.get_attribute("id") or ""
+                    lbl = page.locator(f"label[for='{rid}']").first if rid else None
+                    lbl_text = (await lbl.inner_text()).strip().lower() if lbl and await lbl.count() > 0 else ""
+                    if any(k in lbl_text for k in _rec_kws) or not lbl_text:
+                        if not await radio.is_checked():
+                            await radio.click(force=True)
+                        print(f"          [Submit] CC-305 recovery radio → '{lbl_text[:50]}'", flush=True)
+                        await asyncio.sleep(0.5)
+                        break
+                except Exception:
+                    pass
+            # Retry next button
+            for _nxt_aid in ("pageFooterNextButton", "saveAndSubmitButton", "submitButton"):
+                _nb = page.locator(f"[data-automation-id='{_nxt_aid}']").first
+                if await _nb.count() > 0 and await _nb.is_visible(timeout=2000):
+                    url_before = page.url
+                    await _nb.click()
+                    await asyncio.sleep(SUBMIT_WAIT)
+                    if page.url != url_before:
+                        body = (await page.inner_text("body")).lower()
+                        if any(w in body for w in _confirm_words):
+                            return "applied"
+                        return "submitted (unconfirmed — recovered from CC-305 error)"
+                    break
+    except Exception as _re:
+        print(f"          [Submit] Recovery error: {_re}", flush=True)
+
     return "error: submit did not navigate — check /tmp/wd_submit_debug.png"
 
 
@@ -7016,7 +7075,49 @@ async def _fill_workday(
         elif await apply_page.locator("input[placeholder*='MM/DD/YYYY'], input[placeholder='MM/DD/YYYY']").count() > 0:
             _cc305 = True
         if _cc305:
-            print(f"          [Workday] CC-305 form detected — filling Name + Date", flush=True)
+            print(f"          [Workday] CC-305 form detected — filling disability + Name + Date", flush=True)
+
+            # ── Disability radio ────────────────────────────────────────────
+            # Must select one of: Yes / No / I Don't Wish To Answer
+            _dis_decline_kws = (
+                "i don't wish", "i do not wish", "prefer not", "choose not to answer",
+                "no, i don't", "no disability", "i do not have a disability",
+                "i am not", "does not apply", "decline",
+            )
+            _dis_no_kws = ("no, i don't have", "no disability", "i do not have", "i am not")
+            try:
+                radios = await apply_page.locator("input[type='radio']").all()
+                _dis_picked = False
+                # Prefer "I don't wish to answer" / "No disability" keywords
+                for _kw_set in (_dis_decline_kws, _dis_no_kws):
+                    for radio in radios:
+                        try:
+                            rid = await radio.get_attribute("id") or ""
+                            lbl = apply_page.locator(f"label[for='{rid}']").first if rid else None
+                            lbl_text = (await lbl.inner_text()).strip().lower() if lbl and await lbl.count() > 0 else ""
+                            if any(k in lbl_text for k in _kw_set):
+                                if not await radio.is_checked():
+                                    await radio.click(force=True)
+                                print(f"          [Workday] CC-305 disability → '{lbl_text[:60]}'", flush=True)
+                                _dis_picked = True
+                                break
+                        except Exception:
+                            pass
+                    if _dis_picked:
+                        break
+                if not _dis_picked and radios:
+                    # Fallback: pick last radio (usually "I don't wish to answer")
+                    try:
+                        await radios[-1].click(force=True)
+                        print(f"          [Workday] CC-305 disability → fallback last radio", flush=True)
+                        _dis_picked = True
+                    except Exception:
+                        pass
+                if _dis_picked:
+                    await asyncio.sleep(0.5)
+            except Exception as _de:
+                print(f"          [Workday] CC-305 disability radio error: {_de}", flush=True)
+
             # Name field
             name_val = profile.get("name", "")
             if name_val:

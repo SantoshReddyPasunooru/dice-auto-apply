@@ -127,6 +127,10 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
 /* ── Company select row ── */
 .company-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .company-row select{flex:1;min-width:180px}
+.level-filter{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.level-option{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);font-size:13px;cursor:pointer}
+.level-option input{accent-color:var(--accent)}
+.eligibility-row{display:flex;gap:18px;align-items:end;justify-content:space-between;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -146,8 +150,14 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
   <div class="nav-item" onclick="switchTab('linkedin_outreach')">
     <span class="icon">💼</span><span class="label">LinkedIn</span>
   </div>
+  <div class="nav-item" onclick="switchTab('linkedin_apply')">
+    <span class="icon">🚀</span><span class="label">LinkedIn Job Apply</span>
+  </div>
   <div class="nav-item" onclick="switchTab('dice_apply')">
     <span class="icon">🎲</span><span class="label">Dice Apply</span>
+  </div>
+  <div class="nav-item" onclick="switchTab('handshake_apply')">
+    <span class="icon">🤝</span><span class="label">Handshake Apply</span>
   </div>
   <div class="nav-item" onclick="switchTab('companies_apply')">
     <span class="icon">🏢</span><span class="label">Companies</span>
@@ -170,7 +180,9 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
         <div class="card-title">Feature Status</div>
         <div class="feature-row"><span class="feature-name">Gmail Monitor</span><span id="proc-gmail_monitor" class="badge stopped"><span class="dot"></span>Stopped</span></div>
         <div class="feature-row"><span class="feature-name">LinkedIn Outreach</span><span id="proc-linkedin_outreach" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+        <div class="feature-row"><span class="feature-name">LinkedIn Job Apply</span><span id="proc-linkedin_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
         <div class="feature-row"><span class="feature-name">Dice Apply</span><span id="proc-dice_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+        <div class="feature-row"><span class="feature-name">Handshake Apply</span><span id="proc-handshake_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
         <div class="feature-row"><span class="feature-name">Companies Apply</span><span id="proc-companies_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
       </div>
 
@@ -285,8 +297,8 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
           <input id="li-keywords" type="text" placeholder="gen ai OPT W2" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
         </div>
         <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Job Types</label>
-          <input id="li-job-types" type="text" placeholder="OPT W2 C2C" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Target Roles</label>
+          <input id="li-target-roles" type="text" value="Computer Science, Information Systems, MIS, Software Engineer, Software Developer, Full Stack Developer, Java Developer, Python Developer, Data Engineer, Data Analyst, Business Analyst, Systems Analyst, Cloud Engineer, DevOps Engineer, QA Automation, Database Engineer, Cybersecurity Analyst, Intern" placeholder="comma-separated roles" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
         </div>
         <div>
           <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Posted</label>
@@ -297,8 +309,40 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
           </select>
         </div>
       </div>
+      <div style="margin-top:14px">
+        <label style="font-size:12px;color:var(--text-muted)">Job Types</label>
+        <div class="level-filter" id="li-job-types">
+          <label class="level-option"><input type="checkbox" value="OPT" checked>OPT</label>
+          <label class="level-option"><input type="checkbox" value="STEM OPT" checked>STEM OPT</label>
+          <label class="level-option"><input type="checkbox" value="W2" checked>W2</label>
+          <label class="level-option"><input type="checkbox" value="C2C">C2C</label>
+          <label class="level-option"><input type="checkbox" value="1099">1099</label>
+          <label class="level-option"><input type="checkbox" value="Contract">Contract</label>
+          <label class="level-option"><input type="checkbox" value="Full-time" checked>Full Time</label>
+          <label class="level-option"><input type="checkbox" value="Part-time">Part Time</label>
+          <label class="level-option"><input type="checkbox" value="Internship" checked>Internship</label>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:14px">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Experience Levels</label>
+          <div class="level-filter" id="li-levels">
+            <label class="level-option"><input type="checkbox" value="intern" checked>Intern</label>
+            <label class="level-option"><input type="checkbox" value="junior" checked>Entry / New Grad / Early Career</label>
+            <label class="level-option"><input type="checkbox" value="mid">Mid Level</label>
+            <label class="level-option"><input type="checkbox" value="senior">Senior (optional)</label>
+            <label class="level-option"><input type="checkbox" value="lead">Lead / Staff (optional)</label>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">USA States (multiple)</label>
+          <select id="li-states" multiple size="6" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px"></select>
+        </div>
+      </div>
     </div>
-    <div class="ctrl-row">
+      <div class="ctrl-row">
+      <button class="btn btn-ghost" onclick="startFeature('linkedin_outreach', {auto_apply:true, login:true})">Connect LinkedIn</button>
+      <label class="level-option"><input id="li-auto-apply" type="checkbox"> Auto-apply Easy Apply and external jobs</label>
       <button id="btn-linkedin_outreach" class="btn btn-primary" onclick="startLinkedIn()">▶ Start</button>
       <button id="stop-linkedin_outreach" class="btn btn-danger" onclick="stopFeature('linkedin_outreach')" style="display:none">■ Stop</button>
     </div>
@@ -332,6 +376,42 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
     </div>
   </div>
 
+  <!-- LINKEDIN JOB APPLY -->
+  <div id="sec-linkedin_apply" class="section">
+    <div class="page-title">🚀 LinkedIn Job Apply <span id="badge-linkedin_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Search Settings</div>
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">CS/MIS job keywords</label>
+      <input id="li-apply-keywords" type="text" value="computer science,information systems,management information systems,MIS,software engineer,software developer,full stack,web developer,application developer,java,python,backend,frontend,cloud,devops,data engineer,data analyst,data scientist,business analyst,systems analyst,systems engineer,information technology,IT analyst,cybersecurity,qa automation,test engineer,database engineer,intern" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+      <div class="eligibility-row" style="margin-top:14px">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Experience Levels</label>
+          <div class="level-filter" id="li-apply-levels">
+            <label class="level-option"><input type="checkbox" value="intern" checked>Intern</label>
+            <label class="level-option"><input type="checkbox" value="junior" checked>Entry / New Grad / Early Career</label>
+            <label class="level-option"><input type="checkbox" value="mid">Mid Level</label>
+            <label class="level-option"><input type="checkbox" value="senior">Senior</label>
+            <label class="level-option"><input type="checkbox" value="lead">Lead / Staff</label>
+          </div>
+        </div>
+        <div><label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Maximum Required Experience</label><input id="li-apply-max-years" type="number" min="0" max="4" value="4" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px"></div>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:12px">Uses your saved LinkedIn session, selects the best uploaded resume, handles Easy Apply and supported external ATS forms, and records results.</div>
+    </div>
+    <div class="ctrl-row">
+      <button class="btn btn-ghost" onclick="startFeature('linkedin_apply', {login:true})">Connect LinkedIn</button>
+      <button id="btn-linkedin_apply" class="btn btn-primary" onclick="startLinkedInApply()">▶ Start Auto Apply</button>
+      <button id="stop-linkedin_apply" class="btn btn-danger" onclick="stopFeature('linkedin_apply')" style="display:none">■ Stop</button>
+    </div>
+    <div class="card-title" style="margin:14px 0 8px">Live Log</div>
+    <div class="log-panel" id="log-linkedin_apply"></div>
+    <div style="margin-top:24px;display:flex;align-items:center;justify-content:space-between">
+      <div class="card-title" style="margin:0">Applied Jobs</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadLinkedInAppliedJobs()">↻ Refresh</button>
+    </div>
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Time</th><th>Job</th><th>Status</th><th>Link</th></tr></thead><tbody id="linkedin-applied-jobs-tbody"><tr><td colspan="4" style="padding:20px;color:var(--muted)">No LinkedIn applications yet</td></tr></tbody></table></div>
+  </div>
+
   <!-- DICE APPLY -->
   <div id="sec-dice_apply" class="section">
     <div class="page-title">🎲 Dice Apply <span id="badge-dice_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
@@ -358,6 +438,27 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
             <option value="true">Easy Apply Only</option>
             <option value="false">All Jobs</option>
           </select>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Experience Level Filters</div>
+      <div class="eligibility-row">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Select the job levels to include</label>
+          <div class="level-filter" id="dice-levels">
+            <label class="level-option"><input type="checkbox" value="intern" checked>Intern</label>
+            <label class="level-option"><input type="checkbox" value="new_grad" checked>New Graduate</label>
+            <label class="level-option"><input type="checkbox" value="early_career" checked>Early Career</label>
+            <label class="level-option"><input type="checkbox" value="entry" checked>Entry / Junior</label>
+            <label class="level-option"><input type="checkbox" value="mid">Mid Level</label>
+            <label class="level-option"><input type="checkbox" value="senior">Senior</label>
+            <label class="level-option"><input type="checkbox" value="staff">Staff</label>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Maximum Required Experience</label>
+          <input id="dice-max-years" type="number" min="0" max="4" value="4" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
         </div>
       </div>
     </div>
@@ -401,6 +502,43 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
     </div>
   </div>
 
+  <!-- HANDSHAKE APPLY -->
+  <div id="sec-handshake_apply" class="section">
+    <div class="page-title">🤝 Handshake Apply <span id="badge-handshake_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Search Settings</div>
+      <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Resume-related keywords</label>
+      <input id="hs-keywords" type="text" value="computer science,information systems,management information systems,MIS,software engineer,software developer,full stack,web developer,application developer,java,spring,python,developer,programmer,backend,frontend,cloud,cloud engineer,devops,AI,machine learning,microservices,data engineer,data analyst,data scientist,business analyst,systems analyst,systems engineer,information technology,IT analyst,cybersecurity,security analyst,network engineer,QA automation,QA tester,test engineer,database engineer,technical support,technology consultant,implementation analyst,product analyst,intern" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Experience Level Filters</div>
+      <div class="eligibility-row">
+        <div class="level-filter" id="hs-levels">
+          <label class="level-option"><input type="checkbox" value="intern" checked>Intern</label>
+          <label class="level-option"><input type="checkbox" value="new_grad" checked>New Graduate</label>
+          <label class="level-option"><input type="checkbox" value="early_career" checked>Early Career</label>
+          <label class="level-option"><input type="checkbox" value="entry" checked>Entry / Junior</label>
+          <label class="level-option"><input type="checkbox" value="mid">Mid Level</label>
+          <label class="level-option"><input type="checkbox" value="senior">Senior</label>
+          <label class="level-option"><input type="checkbox" value="staff">Staff</label>
+        </div>
+        <div><label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Maximum Required Experience</label><input id="hs-max-years" type="number" min="0" max="4" value="4" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px"></div>
+      </div>
+    </div>
+    <div class="ctrl-row">
+      <button class="btn btn-ghost" onclick="connectHandshake()">🔐 Connect Handshake</button>
+      <button id="btn-handshake_apply" class="btn btn-primary" onclick="startHandshake()">▶ Start</button>
+      <button id="stop-handshake_apply" class="btn btn-danger" onclick="stopFeature('handshake_apply')" style="display:none">■ Stop</button>
+    </div>
+    <div class="card-title" style="margin:16px 0 8px">Live Log</div>
+    <div class="log-panel" id="log-handshake_apply"></div>
+    <div style="margin-top:24px;display:flex;align-items:center;justify-content:space-between">
+      <div class="card-title" style="margin:0">Applied Jobs</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadHandshakeJobs()">↻ Refresh</button>
+    </div>
+    <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Time</th><th>Job</th><th>Status</th><th>Link</th></tr></thead><tbody id="handshake-jobs-tbody"><tr><td colspan="4" style="padding:20px;color:var(--muted)">No Handshake applications yet</td></tr></tbody></table></div>
+  </div>
+
   <!-- COMPANIES APPLY -->
   <div id="sec-companies_apply" class="section">
     <div class="page-title">🏢 Companies Apply <span id="badge-companies_apply" class="badge stopped"><span class="dot"></span>Stopped</span></div>
@@ -414,6 +552,8 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <label style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Companies</label>
           <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="selectCompanyGroup('FAANG')">FAANG</button>
+            <button class="btn btn-ghost btn-sm" onclick="selectCompanyGroup('MANGOS')">MANGOES / MANGOS</button>
             <button class="btn btn-ghost btn-sm" onclick="toggleAllCompanies(true)">Select All</button>
             <button class="btn btn-ghost btn-sm" onclick="toggleAllCompanies(false)">Clear</button>
           </div>
@@ -421,10 +561,11 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
         <div id="company-checkbox-list" style="max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;background:var(--bg)">
           <span style="color:var(--muted);font-size:12px">Loading…</span>
         </div>
+        <div id="company-group-status" style="margin-top:8px;color:var(--muted);font-size:12px">Loading company groups…</div>
       </div>
 
       <!-- Filters row -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div>
           <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Location</label>
           <input id="ca-location" type="text" placeholder="remote, austin" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
@@ -441,16 +582,35 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
         </div>
         <div>
           <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Keywords</label>
-          <input id="ca-keywords" type="text" placeholder="python, ai, ml" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+          <input id="ca-keywords" type="text" value="software engineer,full stack,java,spring,python,backend,frontend,developer,cloud,devops,ai,machine learning,microservices,data engineer,data analyst,business analyst,systems analyst,IT analyst,QA automation,database engineer" placeholder="python, ai, ml" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+          <label class="level-option" style="margin-top:7px;width:max-content"><input id="ca-all-roles" type="checkbox" onchange="toggleCompanyKeywords()">Apply all eligible roles (ignore keywords)</label>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Experience Level Filters</div>
+      <div class="eligibility-row">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted)">Select the job levels to include</label>
+          <div class="level-filter" id="ca-levels">
+            <label class="level-option"><input type="checkbox" value="intern" checked>Intern</label>
+            <label class="level-option"><input type="checkbox" value="new_grad" checked>New Graduate</label>
+            <label class="level-option"><input type="checkbox" value="early_career" checked>Early Career</label>
+            <label class="level-option"><input type="checkbox" value="entry" checked>Entry / Junior</label>
+            <label class="level-option"><input type="checkbox" value="mid">Mid Level</label>
+            <label class="level-option"><input type="checkbox" value="senior">Senior</label>
+            <label class="level-option"><input type="checkbox" value="staff">Staff</label>
+          </div>
         </div>
         <div>
-          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Experience</label>
-          <input id="ca-experience" type="text" placeholder="senior, staff" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Maximum Required Experience</label>
+          <input id="ca-max-years" type="number" min="0" max="4" value="4" style="width:110px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:14px">
         </div>
       </div>
     </div>
 
     <div class="ctrl-row">
+      <button class="btn btn-ghost" onclick="connectCompany()">🔐 Connect Selected Workday</button>
       <button id="btn-companies_apply" class="btn btn-primary" onclick="startCompanies()">▶ Start</button>
       <button id="stop-companies_apply" class="btn btn-danger" onclick="stopFeature('companies_apply')" style="display:none">■ Stop</button>
     </div>
@@ -524,6 +684,15 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
           <div class="field full"><label>Full Name</label><input type="text" name="name"></div>
           <div class="field"><label>Phone</label><input type="tel" name="phone"></div>
           <div class="field"><label>Location (City, State)</label><input type="text" name="location"></div>
+          <div class="field">
+            <label>Country</label>
+            <select name="country">
+              <option>United States</option>
+              <option>Canada</option>
+              <option>United Kingdom</option>
+              <option>India</option>
+            </select>
+          </div>
           <div class="field"><label>Address Line 1</label><input type="text" name="address_line1"></div>
           <div class="field"><label>Postal Code</label><input type="text" name="postal_code"></div>
         </div>
@@ -569,8 +738,19 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
         <div class="profile-grid">
           <div class="field"><label>Current Title</label><input type="text" name="current_title"></div>
           <div class="field"><label>Current Company</label><input type="text" name="current_company"></div>
+          <div class="field"><label>Work Start Month</label><input type="text" name="work_start_month" placeholder="MM"></div>
+          <div class="field"><label>Work Start Year</label><input type="text" name="work_start_year" placeholder="YYYY"></div>
+          <div class="field"><label>Work End Month</label><input type="text" name="work_end_month" placeholder="MM"></div>
+          <div class="field"><label>Work End Year</label><input type="text" name="work_end_year" placeholder="YYYY"></div>
+          <div class="field">
+            <label>Currently Employed There</label>
+            <select name="currently_employed">
+              <option value="false">No</option>
+              <option value="true">Yes</option>
+            </select>
+          </div>
           <div class="field"><label>Years of Experience</label><input type="number" name="years_experience" min="0" max="40"></div>
-          <div class="field"><label>Work Start Year</label><input type="text" name="work_start_year" placeholder="e.g. 2020"></div>
+          <div class="field"><label>Maximum Required Experience</label><input type="number" name="max_required_years" min="0" max="4" value="4"></div>
           <div class="field full"><label>Skills (comma-separated)</label><textarea name="skills"></textarea></div>
           <div class="field"><label>Previous Clients</label><input type="text" name="previous_clients"></div>
           <div class="field">
@@ -606,7 +786,7 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
         <div class="profile-grid">
           <div class="field"><label>School / University</label><input type="text" name="school"></div>
           <div class="field">
-            <label>Degree</label>
+            <label>Degree Level</label>
             <select name="degree">
               <option>Master's Degree</option>
               <option>Bachelor's Degree</option>
@@ -615,6 +795,7 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
               <option>Other</option>
             </select>
           </div>
+          <div class="field"><label>Field of Study / Major</label><input type="text" name="field_of_study" placeholder="e.g. Management Information Systems"></div>
           <div class="field"><label>Graduation Year</label><input type="text" name="graduation_year" placeholder="e.g. 2024"></div>
         </div>
       </fieldset>
@@ -631,6 +812,14 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
       <fieldset>
         <legend>Resumes</legend>
         <div class="profile-grid">
+          <div class="field full">
+            <label>Upload New Resumes (PDF or DOCX)</label>
+            <input id="resume-files" type="file" accept=".pdf,.docx" multiple>
+            <label class="level-option" style="width:max-content"><input id="resume-set-default" type="checkbox" checked>Set first upload as default</label>
+            <button type="button" class="btn btn-primary btn-sm" style="width:max-content" onclick="uploadResumes()">Upload Resumes</button>
+            <span id="resume-upload-msg" class="save-msg"></span>
+          </div>
+          <div class="field full"><label>Available Resumes / Select Default</label><div id="resume-list" class="level-filter">Loading…</div></div>
           <div class="field full"><label>Resume Folder (absolute path)</label><input type="text" name="resume_folder" placeholder="/Users/you/Desktop/amazon"></div>
           <div class="field full"><label>Default Resume (absolute path to file)</label><input type="text" name="default_resume" placeholder="/Users/you/Desktop/amazon/RESUME.pdf"></div>
         </div>
@@ -675,8 +864,10 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
 
 <script>
 const PROFILE_EMAIL = {{ profile_email | tojson }};
-const FEATURES      = ['gmail_monitor','linkedin_outreach','dice_apply','companies_apply'];
+const FEATURES      = ['gmail_monitor','linkedin_outreach','linkedin_apply','dice_apply','handshake_apply','companies_apply'];
 const streams       = {};
+const US_STATES     = ['ALL','AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
+const US_STATE_NAMES = {ALL:'All USA States',AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming'};
 
 // ── Tab switching ──────────────────────────────────────────────────────────────
 function switchTab(name) {
@@ -687,10 +878,12 @@ function switchTab(name) {
     if (n.getAttribute('onclick').includes("'" + name + "'")) n.classList.add('active');
   });
   if (name !== 'home' && name !== 'profile') connectStream(name);
-  if (name === 'profile') loadProfile();
-  if (name === 'companies_apply') { loadCompanies(); loadCompanyJobs(); }
+  if (name === 'profile') { loadProfile(); loadResumes(); }
+  if (name === 'companies_apply') { loadCompanies(); loadCompanyGroups(); loadCompanyJobs(); }
   if (name === 'dice_apply') loadJobs();
+  if (name === 'handshake_apply') { connectStream('handshake_apply'); loadHandshakeJobs(); }
   if (name === 'linkedin_outreach') { loadRecruiters(); loadLinkedInConfig(); }
+  if (name === 'linkedin_apply') { connectStream('linkedin_apply'); loadLinkedInAppliedJobs(); }
   if (name === 'gmail_monitor') loadGmailContacts();
 }
 
@@ -835,18 +1028,52 @@ function stopFeature(feature) {
 }
 
 function startLinkedIn() {
+  const jobTypes = selectedLevels('li-job-types');
+  const experienceLevels = selectedLevels('li-levels');
+  const locations = [...document.getElementById('li-states').selectedOptions].map(opt => opt.value);
   const extra = {
     keywords:  document.getElementById('li-keywords').value.trim() || undefined,
-    job_types: document.getElementById('li-job-types').value.trim() || undefined,
+    job_types: jobTypes,
+    target_roles: document.getElementById('li-target-roles').value.split(',').map(v => v.trim()).filter(Boolean),
+    experience_levels: experienceLevels,
+    locations,
     date:      document.getElementById('li-date').value || undefined,
+    auto_apply: document.getElementById('li-auto-apply').checked,
   };
   startFeature('linkedin_outreach', extra);
+}
+
+function startLinkedInApply() {
+  const experienceLevels = selectedLevels('li-apply-levels');
+  if (!experienceLevels.length) { alert('Select at least one experience level'); return; }
+  startFeature('linkedin_apply', {
+    keywords: document.getElementById('li-apply-keywords').value.trim(),
+    experience_levels: experienceLevels,
+    max_required_years: Number(document.getElementById('li-apply-max-years').value),
+  });
+}
+
+function loadLinkedInAppliedJobs() {
+  fetch('/api/linkedin-applied-jobs?limit=200').then(r => r.json()).then(rows => {
+    const body = document.getElementById('linkedin-applied-jobs-tbody');
+    if (!body) return;
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="4" style="padding:20px;color:var(--muted)">No LinkedIn applications yet</td></tr>'; return; }
+    body.innerHTML = rows.map(row => `<tr><td>${escHtml(row.timestamp || '')}</td><td>${escHtml(row.job_title || '')}</td><td>${escHtml(row.status || '')}</td><td><a href="${escHtml(row.job_url || '#')}" target="_blank">Open</a></td></tr>`).join('');
+  }).catch(() => {});
+}
+
+function selectedLevels(containerId) {
+  return [...document.querySelectorAll(`#${containerId} input[type=checkbox]:checked`)].map(el => el.value);
 }
 
 function loadLinkedInConfig() {
   fetch('/api/linkedin-config').then(r => r.json()).then(cfg => {
     if (cfg.keywords)  document.getElementById('li-keywords').value  = cfg.keywords;
-    if (cfg.job_types) document.getElementById('li-job-types').value = cfg.job_types;
+    if (cfg.target_roles) document.getElementById('li-target-roles').value = cfg.target_roles;
+    const types = Array.isArray(cfg.job_types) ? cfg.job_types : String(cfg.job_types || '').split(' ');
+    document.querySelectorAll('#li-job-types input').forEach(el => el.checked = types.includes(el.value) || types.includes(el.value.toUpperCase()));
+    document.querySelectorAll('#li-levels input').forEach(el => el.checked = (cfg.experience_levels || ['junior']).includes(el.value));
+    [...document.getElementById('li-states').options].forEach(opt => opt.selected = (cfg.locations || []).includes(opt.value));
     if (cfg.date) {
       const sel = document.getElementById('li-date');
       for (const opt of sel.options) { if (opt.value === cfg.date) { opt.selected = true; break; } }
@@ -854,11 +1081,40 @@ function loadLinkedInConfig() {
   });
 }
 
+function loadResumes() {
+  fetch('/api/resumes').then(r => r.json()).then(data => {
+    const list = document.getElementById('resume-list');
+    if (!data.files.length) { list.textContent = 'No resumes uploaded'; return; }
+    list.innerHTML = data.files.map(file => `<label class="level-option"><input type="radio" name="default-resume-choice" value="${escHtml(file)}" ${file === data.default ? 'checked' : ''} onchange="setDefaultResume(this.value)">${escHtml(file)}</label>`).join('');
+  });
+}
+
+function uploadResumes() {
+  const input = document.getElementById('resume-files');
+  if (!input.files.length) { alert('Select one or more PDF or DOCX resumes'); return; }
+  const form = new FormData();
+  [...input.files].forEach(file => form.append('resumes', file));
+  form.append('set_default', document.getElementById('resume-set-default').checked ? 'true' : 'false');
+  fetch('/api/resumes/upload', {method:'POST', body:form}).then(r => r.json()).then(data => {
+    document.getElementById('resume-upload-msg').textContent = data.ok ? `✓ Uploaded ${data.files.length}` : `✗ ${data.error}`;
+    if (data.ok) { input.value = ''; loadResumes(); loadProfile(); }
+  });
+}
+
+function setDefaultResume(filename) {
+  fetch('/api/resumes/default', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filename})})
+    .then(r => r.json()).then(data => { if (!data.ok) alert(data.error); else loadProfile(); });
+}
+
 function startDice() {
+  const experienceLevels = selectedLevels('dice-levels');
+  if (!experienceLevels.length) { alert('Select at least one experience level'); return; }
   const extra = {
     query:      document.getElementById('dice-query').value.trim() || undefined,
     date:       document.getElementById('dice-date').value || undefined,
     easy_apply: document.getElementById('dice-easy').value === 'true',
+    experience_levels: experienceLevels,
+    max_required_years: Number(document.getElementById('dice-max-years').value),
   };
   startFeature('dice_apply', extra);
 }
@@ -868,8 +1124,60 @@ function connectDice() {
   startFeature('dice_apply', {login: true});
 }
 
+function startHandshake() {
+  const experienceLevels = selectedLevels('hs-levels');
+  if (!experienceLevels.length) { alert('Select at least one experience level'); return; }
+  startFeature('handshake_apply', {
+    keywords: document.getElementById('hs-keywords').value.trim(),
+    experience_levels: experienceLevels,
+    max_required_years: Number(document.getElementById('hs-max-years').value),
+  });
+}
+
+function connectHandshake() {
+  switchTab('handshake_apply');
+  startFeature('handshake_apply', {login: true});
+}
+
+function loadHandshakeJobs() {
+  fetch('/api/handshake-jobs?limit=200').then(r => r.json()).then(rows => {
+    const body = document.getElementById('handshake-jobs-tbody');
+    if (!body) return;
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="4" style="padding:20px;color:var(--muted)">No Handshake applications yet</td></tr>'; return; }
+    body.innerHTML = rows.map(row => `<tr><td>${escHtml(row.timestamp || '')}</td><td>${escHtml(row.job_title || '')}</td><td>${escHtml(row.status || '')}</td><td><a href="${escHtml(row.job_url || '#')}" target="_blank">Open</a></td></tr>`).join('');
+  }).catch(() => {});
+}
+
 function toggleAllCompanies(check) {
   document.querySelectorAll('#company-checkbox-list input[type=checkbox]').forEach(cb => cb.checked = check);
+}
+
+function selectCompanyGroup(groupName) {
+  fetch('/api/company-groups').then(r => r.json()).then(groups => {
+    const group = groups[groupName] || {members: [], available: []};
+    const selected = new Set(group.available || []);
+    document.querySelectorAll('#company-checkbox-list input[type=checkbox]').forEach(cb => cb.checked = selected.has(cb.value));
+    if (!selected.size) alert(`${groupName} companies are not yet configured for automatic applications.`);
+  });
+}
+
+function loadCompanyGroups() {
+  fetch('/api/company-groups').then(r => r.json()).then(groups => {
+    const container = document.getElementById('company-group-status');
+    container.innerHTML = Object.entries(groups).map(([name, group]) => {
+      const available = new Set(group.available || []);
+      const autoApply = new Set(group.auto_apply || []);
+      return `<div style="margin-top:4px"><strong>${escHtml(name)}</strong>: ${(group.members || []).map(company =>
+        `<span style="color:${autoApply.has(company) ? 'var(--green)' : available.has(company) ? '#fbbf24' : 'var(--muted)'};margin-left:6px">${escHtml(company)}${autoApply.has(company) ? ' ✓ auto-apply' : available.has(company) ? ' · manual ATS' : ' · not configured'}</span>`
+      ).join('')}</div>`;
+    }).join('');
+  });
+}
+
+function connectCompany() {
+  const companies = [...document.querySelectorAll('#company-checkbox-list input[type=checkbox]:checked')].map(cb => cb.value);
+  if (companies.length !== 1) { alert('Select exactly one Workday company to connect'); return; }
+  startFeature('companies_apply', {companies, login: true});
 }
 
 function startCompanies() {
@@ -877,9 +1185,24 @@ function startCompanies() {
   if (!companies.length) { alert('Please select at least one company'); return; }
   const location   = document.getElementById('ca-location').value.trim()   || undefined;
   const date       = document.getElementById('ca-date').value               || undefined;
-  const keywords   = document.getElementById('ca-keywords').value.trim()   || undefined;
-  const experience = document.getElementById('ca-experience').value.trim() || undefined;
-  startFeature('companies_apply', {companies, location, date, keywords, experience});
+  const allRoles   = document.getElementById('ca-all-roles').checked;
+  const keywords   = allRoles ? undefined : (document.getElementById('ca-keywords').value.trim() || undefined);
+  const experienceLevels = selectedLevels('ca-levels');
+  if (!experienceLevels.length) { alert('Select at least one experience level'); return; }
+  const experience = experienceLevels.join(',');
+  const max_required_years = Number(document.getElementById('ca-max-years').value);
+  startFeature('companies_apply', {
+    companies, location, date, keywords, experience,
+    experience_levels: experienceLevels,
+    max_required_years,
+  });
+}
+
+function toggleCompanyKeywords() {
+  const allRoles = document.getElementById('ca-all-roles').checked;
+  const input = document.getElementById('ca-keywords');
+  input.disabled = allRoles;
+  input.style.opacity = allRoles ? '0.55' : '1';
 }
 
 function connectGmail() {
@@ -1025,6 +1348,17 @@ function loadProfile() {
         el.value = v || '';
       }
     });
+    const levels = Array.isArray(p.experience_levels)
+      ? p.experience_levels
+      : ['intern', 'new_grad', 'early_career', 'entry'];
+    for (const containerId of ['dice-levels', 'ca-levels']) {
+      document.querySelectorAll(`#${containerId} input[type=checkbox]`).forEach(el => {
+        el.checked = levels.includes(el.value);
+      });
+    }
+    const maxYears = Math.max(0, Math.min(4, Number(p.max_required_years ?? 4)));
+    document.getElementById('dice-max-years').value = maxYears;
+    document.getElementById('ca-max-years').value = maxYears;
   });
 }
 
@@ -1037,7 +1371,7 @@ function saveProfile() {
     else data[el.name] = el.value;
   }
   // Coerce booleans
-  ['needs_sponsorship','open_to_relocation'].forEach(k => {
+  ['needs_sponsorship','open_to_relocation','currently_employed'].forEach(k => {
     if (k in data) data[k] = (data[k] === 'true' || data[k] === true);
   });
   fetch('/api/profile', {
@@ -1052,6 +1386,7 @@ function saveProfile() {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
+document.getElementById('li-states').innerHTML = US_STATES.map(state => `<option value="${state}">${US_STATE_NAMES[state]}${state === 'ALL' ? '' : ` (${state})`}</option>`).join('');
 loadStatus();
 loadStats();
 loadActivity();

@@ -31,6 +31,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from job_eligibility import early_career_rejection_reason
 from playwright.async_api import async_playwright, Page, Frame, BrowserContext
 try:
     import gmail_sender as _gmail_sender
@@ -71,6 +72,9 @@ _EXP_SYNONYMS: dict[str, list[str]] = {
     "senior":    ["senior", "sr"],
     "lead":      ["lead"],
     "mid":       ["mid", "intermediate", " ii ", " 2 "],
+    "entry":     ["entry", "junior", "jr", "associate", " i ", " 1 ", "level 1", "l3"],
+    "new_grad":  ["new grad", "new graduate", "recent grad", "recent graduate"],
+    "early_career": ["early career"],
     "junior":    ["junior", "jr", "entry", "associate", "new grad",
                   "early career", " i ", " 1 ", "level 1", "l3",
                   "intern", "internship"],
@@ -275,6 +279,7 @@ def greenhouse_list_jobs(slug: str) -> list[dict]:
             "id":        str(j.get("id", "")),
             "ats":       "greenhouse",
             "posted_at": j.get("updated_at", ""),   # ISO-8601 string
+            "description": j.get("content", ""),
         })
     return jobs
 
@@ -356,6 +361,10 @@ def lever_list_jobs(slug: str) -> list[dict]:
             "id":        j.get("id", ""),
             "ats":       "lever",
             "posted_at": posted_iso,
+            "description": "\n".join(filter(None, (
+                j.get("descriptionPlain", ""),
+                j.get("additionalPlain", ""),
+            ))),
         })
     return jobs
 
@@ -573,6 +582,7 @@ def filter_jobs(
     experience:  Optional[list[str]] = None,
     work_type:   Optional[list[str]] = None,
     us_only:     bool                = False,
+    max_required_years: Optional[int] = None,
 ) -> list[dict]:
     """
     Filter jobs by:
@@ -607,6 +617,14 @@ def filter_jobs(
         title_lower = j["title"].lower()
         loc_field   = j.get("location", "").lower()
         title_loc   = f" {title_lower} {loc_field} "  # padded for whole-word synonyms
+
+        if max_required_years is not None:
+            rejection_reason = early_career_rejection_reason(
+                j["title"], j.get("description", ""), max_required_years,
+                experience,
+            )
+            if rejection_reason:
+                continue
 
         # keyword filter
         if kw_lower and not any(k in title_lower for k in kw_lower):
@@ -961,6 +979,8 @@ def answer_for(label: str, profile: dict, email: str) -> str:
         return "Yes"
     if re.search(r"require.*sponsor|need.*sponsor|visa.*sponsor|sponsor.*visa|require.*company.*sponsor", l):
         return "Yes" if profile.get("needs_sponsorship") else "No"
+    if re.search(r"tobacco|nicotine|cigarette|smok(e|ing)|vape|vaping|snuff", l):
+        return "No"
     if re.search(r"work.*auth.*type|visa.*type|visa.*status|immigration.*status", l):
         return profile.get("work_auth", "OPT")
 
@@ -988,8 +1008,10 @@ def answer_for(label: str, profile: dict, email: str) -> str:
     if re.search(r"^school$|^university$|^college$|^institution$|school.*name|university.*name|"
                  r"where.*study|where.*attend|education.*institution|name.*school", l):
         return profile.get("school", "")
-    if re.search(r"^degree$|degree.*type|type.*degree|highest.*degree|level.*education|"
-                 r"education.*level|field.*study|area.*study|major", l):
+    if re.search(r"field.*study|area.*study|major|discipline|concentration|program.*study", l):
+        return profile.get("field_of_study", profile.get("major", ""))
+    if re.search(r"^degree$|degree.*type|type.*degree|degree.*level|level.*degree|highest.*degree|level.*education|"
+                 r"education.*level", l):
         return profile.get("degree", "")
     if re.search(r"graduation.*year|year.*graduation|grad.*year|expected.*graduation", l):
         return profile.get("graduation_year", "")
@@ -2461,5 +2483,3 @@ async def _apply_collected_answers(target, answers: dict):
                 pass
     except Exception:
         pass
-
-

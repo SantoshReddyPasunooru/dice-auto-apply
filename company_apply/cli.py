@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+from job_eligibility import early_career_rejection_reason
 from playwright.async_api import async_playwright, Page, Frame, BrowserContext
 try:
     import gmail_sender as _gmail_sender
@@ -50,6 +51,20 @@ from .ashby import _fill_ashby
 
 # ── Main apply loop ─────────────────────────────────────────────────────────────
 
+async def _loaded_job_rejection_reason(
+    page: Page,
+    title: str,
+    max_required_years: int,
+    allowed_levels: Optional[list[str]] = None,
+) -> str | None:
+    try:
+        description = await page.locator("body").inner_text(timeout=5000)
+    except Exception:
+        description = ""
+    return early_career_rejection_reason(
+        title, description, max_required_years, allowed_levels
+    )
+
 async def apply_to_company(
     company_rec: dict,
     profile:     dict,
@@ -68,6 +83,7 @@ async def apply_to_company(
     slug    = company_rec.get("slug", "")
     c_url   = company_rec.get("careers_url", "")
     applied_urls = load_applied_urls(email)
+    max_required_years = int(profile.get("max_required_years", 4))
 
     # Show resume folder at startup; actual resume picked per-job by title
     try:
@@ -143,24 +159,21 @@ async def apply_to_company(
             print(f"  Already applied / exhausted: {already_done} (skipped)")
 
         def _run_filter(kw, locs, days, exp, wt, us):
-            return filter_jobs(all_jobs, kw, applied_urls, locs, days, exp, wt, us)
+            return filter_jobs(
+                all_jobs, kw, applied_urls, locs, days, exp, wt, us,
+                max_required_years,
+            )
 
         jobs = _run_filter(keywords, locations, posted_days, experience, work_type, us_only)
         print(f"  {len(jobs)} eligible this run (match filters + not yet applied).")
 
         if not jobs and experience:
-            print(f"\n  ↩  Experience filter [{', '.join(experience)}] matched 0 roles.")
-            print(f"     {company_rec['name']} likely does not use level labels in job titles.")
-            print(f"     Retrying without experience filter (keeping keywords/location/date)...")
-            jobs = _run_filter(keywords, locations, posted_days, [], work_type, us_only)
-            if jobs:
-                print(f"  ✓  {len(jobs)} roles found — experience filter dropped.\n")
-            else:
-                print(f"  Still 0 after dropping experience.")
+            print(f"\n  ✗  Experience filter [{', '.join(experience)}] matched 0 roles at {company_rec['name']}.")
+            print(f"     Skipping — not falling back to unfiltered results.")
         if not jobs and posted_days:
             print(f"\n  ↩  Date filter (last {posted_days}d) matched 0 roles.")
             print(f"     Retrying without date restriction (keeping keywords/location)...")
-            jobs = _run_filter(keywords, locations, None, [], work_type, us_only)
+            jobs = _run_filter(keywords, locations, None, experience, work_type, us_only)
             if jobs:
                 print(f"  ✓  {len(jobs)} roles found — date filter dropped.\n")
             else:
@@ -168,14 +181,14 @@ async def apply_to_company(
         if not jobs and locations:
             print(f"\n  ↩  Location filter [{', '.join(locations)}] matched 0 roles.")
             print(f"     Retrying without location restriction (keeping keywords)...")
-            jobs = _run_filter(keywords, [], None, [], work_type, us_only)
+            jobs = _run_filter(keywords, [], None, experience, work_type, us_only)
             if jobs:
                 print(f"  ✓  {len(jobs)} roles found — location filter dropped.\n")
             else:
                 print(f"  Still 0 after dropping location.")
         if not jobs and keywords:
             print(f"\n  ↩  Retrying with keywords only: {', '.join(keywords)}")
-            jobs = _run_filter(keywords, [], None, [], [], us_only)
+            jobs = _run_filter(keywords, [], None, experience, [], us_only)
             if jobs:
                 print(f"  ✓  {len(jobs)} roles match keywords.\n")
             else:
@@ -264,24 +277,21 @@ async def apply_to_company(
                 print(f"  Already applied / exhausted: {already_done} (skipped)")
 
             def _run_filter(kw, locs, days, exp, wt, us):
-                return filter_jobs(all_jobs, kw, applied_urls, locs, days, exp, wt, us)
+                return filter_jobs(
+                    all_jobs, kw, applied_urls, locs, days, exp, wt, us,
+                    max_required_years,
+                )
 
             jobs = _run_filter(keywords, locations, posted_days, experience, work_type, us_only)
             print(f"  {len(jobs)} eligible this run (match filters + not yet applied).")
 
             if not jobs and experience:
-                print(f"\n  ↩  Experience filter [{', '.join(experience)}] matched 0 roles.")
-                print(f"     {company_rec['name']} likely does not use level labels in job titles.")
-                print(f"     Retrying without experience filter (keeping keywords/location/date)...")
-                jobs = _run_filter(keywords, locations, posted_days, [], work_type, us_only)
-                if jobs:
-                    print(f"  ✓  {len(jobs)} roles found — experience filter dropped.\n")
-                else:
-                    print(f"  Still 0 after dropping experience.")
+                print(f"\n  ✗  Experience filter [{', '.join(experience)}] matched 0 roles at {company_rec['name']}.")
+                print(f"     Skipping — not falling back to unfiltered results.")
             if not jobs and posted_days:
                 print(f"\n  ↩  Date filter (last {posted_days}d) matched 0 roles.")
                 print(f"     Retrying without date restriction (keeping keywords/location)...")
-                jobs = _run_filter(keywords, locations, None, [], work_type, us_only)
+                jobs = _run_filter(keywords, locations, None, experience, work_type, us_only)
                 if jobs:
                     print(f"  ✓  {len(jobs)} roles found — date filter dropped.\n")
                 else:
@@ -289,14 +299,14 @@ async def apply_to_company(
             if not jobs and locations:
                 print(f"\n  ↩  Location filter [{', '.join(locations)}] matched 0 roles.")
                 print(f"     Retrying without location restriction (keeping keywords)...")
-                jobs = _run_filter(keywords, [], None, [], work_type, us_only)
+                jobs = _run_filter(keywords, [], None, experience, work_type, us_only)
                 if jobs:
                     print(f"  ✓  {len(jobs)} roles found — location filter dropped.\n")
                 else:
                     print(f"  Still 0 after dropping location.")
             if not jobs and keywords:
                 print(f"\n  ↩  Retrying with keywords only: {', '.join(keywords)}")
-                jobs = _run_filter(keywords, [], None, [], [], us_only)
+                jobs = _run_filter(keywords, [], None, experience, [], us_only)
                 if jobs:
                     print(f"  ✓  {len(jobs)} roles match keywords.\n")
                 else:
@@ -348,19 +358,36 @@ async def apply_to_company(
                     except Exception:
                         pass
                     await asyncio.sleep(1)  # brief settle before gate
-                    # _fill_workday handles gate + popup detection using new_pages
-                    status = await _fill_workday(page, profile, email, resume, company,
-                                                 new_pages=_new_pages)
+                    rejection_reason = await _loaded_job_rejection_reason(
+                        page, title, max_required_years, experience
+                    )
+                    if rejection_reason:
+                        status = f"skipped - {rejection_reason}"
+                    else:
+                        status = await _fill_workday(page, profile, email, resume, company,
+                                                     new_pages=_new_pages)
                     ctx.remove_listener("page", _wd_listener)
                 elif job_ats in ("greenhouse", "stripe"):
                     await page.goto(job_url, wait_until="load", timeout=0)
-                    status = await _fill_greenhouse(page, profile, email, resume, title, company)
+                    rejection_reason = await _loaded_job_rejection_reason(
+                        page, title, max_required_years, experience
+                    )
+                    status = (f"skipped - {rejection_reason}" if rejection_reason else
+                              await _fill_greenhouse(page, profile, email, resume, title, company))
                 elif job_ats == "lever":
                     await page.goto(job_url, wait_until="load", timeout=0)
-                    status = await _fill_lever(page, profile, email, resume)
+                    rejection_reason = await _loaded_job_rejection_reason(
+                        page, title, max_required_years, experience
+                    )
+                    status = (f"skipped - {rejection_reason}" if rejection_reason else
+                              await _fill_lever(page, profile, email, resume))
                 elif job_ats == "ashby":
                     await page.goto(job_url, wait_until="load", timeout=0)
-                    status = await _fill_ashby(page, profile, email, resume)
+                    rejection_reason = await _loaded_job_rejection_reason(
+                        page, title, max_required_years, experience
+                    )
+                    status = (f"skipped - {rejection_reason}" if rejection_reason else
+                              await _fill_ashby(page, profile, email, resume))
                 else:
                     await page.goto(job_url, wait_until="load", timeout=0)
                     status = "skipped - unsupported ATS"
@@ -484,6 +511,8 @@ def main():
                     help="Only include jobs posted within the last N days, e.g. 30.")
     ap.add_argument("--experience",
                     help="Comma-separated experience-level keywords in title, e.g. 'senior,staff,principal'.")
+    ap.add_argument("--max-required-years", type=int, default=None,
+                    help="Reject roles requiring more than this many years (maximum 4).")
     ap.add_argument("--work-type",
                     help="Comma-separated work-type keywords, e.g. 'internship,contract'.")
     ap.add_argument("--us-only", action="store_true",
@@ -565,6 +594,8 @@ def main():
     profile["email"] = email
     print(f"\n  Profile: {profile.get('name')} <{email}>")
     profile = ensure_profile_complete(profile, email)
+    if args.max_required_years is not None:
+        profile["max_required_years"] = max(0, min(4, args.max_required_years))
 
     # ── Pick company ──────────────────────────────────────────────────────────
     db = load_company_db()

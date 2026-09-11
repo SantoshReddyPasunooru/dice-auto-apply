@@ -208,6 +208,20 @@ async def _wd_fill_input(page: Page, aid: str, val: str) -> bool:
     return False
 
 
+async def _wd_fill_date(page: Page, aid: str, month: str, year: str) -> bool:
+    container = page.locator(f"[data-automation-id='formField-{aid}']").first
+    if await container.count() == 0:
+        return False
+    month_input = container.locator("[data-automation-id='dateSectionMonth-input']").first
+    year_input = container.locator("[data-automation-id='dateSectionYear-input']").first
+    if await month_input.count() == 0 or await year_input.count() == 0:
+        return False
+    await month_input.fill(str(month).zfill(2))
+    await year_input.fill(str(year))
+    await year_input.press("Tab")
+    return bool(await month_input.input_value() and await year_input.input_value())
+
+
 async def _wd_my_information(page: Page, profile: dict, email: str, resume: Optional[Path]) -> None:
     """Fill Workday 'My Information' step. Works for both guest and authenticated flows."""
     await _wd_upload_resume(page, resume)
@@ -228,6 +242,13 @@ async def _wd_my_information(page: Page, profile: dict, email: str, resume: Opti
     last  = name_parts[1] if len(name_parts) > 1 else ""
     loc   = profile.get("location", "")
     city  = loc.split(",")[0].strip() if loc else ""
+    country = profile.get("country") or "United States"
+
+    for country_aid in ("country", "addressCountry"):
+        if await _wd_dropdown(page, country_aid, country):
+            print(f"          [Info] Country: {country}", flush=True)
+            await asyncio.sleep(0.5)
+            break
 
     field_map = [
         ("legalName--firstName",  first),
@@ -397,6 +418,7 @@ async def _wd_my_information(page: Page, profile: dict, email: str, resume: Opti
     # State/region dropdown
     if "," in loc:
         state = loc.split(",")[1].strip()
+        state = {"OH": "Ohio"}.get(state.upper(), state)
         await _wd_dropdown(page, "countryRegion", state)
 
     await _wd_next(page)
@@ -409,12 +431,18 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     await asyncio.sleep(0.5)
 
 
-    title   = profile.get("current_title", "Software Engineer")
-    company = profile.get("current_company", "Self-employed")
+    title   = profile.get("current_title") or "Software Engineer"
+    company = profile.get("current_company") or "Deloitte"
     school  = profile.get("school", "")
     degree  = profile.get("degree", "")
-    grad_yr = profile.get("graduation_year", "2024")
-    start_yr = profile.get("work_start_year", "2020")
+    field_of_study = profile.get("field_of_study", profile.get("major", ""))
+    grad_yr = profile.get("graduation_year") or "2026"
+    start_month = profile.get("work_start_month") or "08"
+    start_yr = profile.get("work_start_year") or "2023"
+    end_month = profile.get("work_end_month") or "12"
+    end_yr = profile.get("work_end_year") or "2024"
+    currently_raw = profile.get("currently_employed", False)
+    currently_employed = currently_raw is True or str(currently_raw).lower() in ("true", "yes", "1")
 
     # --- Work Experience fields ---
     # Wait for the Work Experience section to render
@@ -435,9 +463,10 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     # "Currently work here" checkbox — force=True because Workday styles the real input hidden
     try:
         chk = page.locator("[data-automation-id='formField-currentlyWorkHere'] input[type='checkbox']").first
-        if await chk.count() > 0 and not await chk.is_checked():
-            await chk.click(force=True)
-            await asyncio.sleep(0.5)
+        if await chk.count() > 0:
+            if currently_employed != await chk.is_checked():
+                await chk.click(force=True)
+                await asyncio.sleep(0.5)
     except Exception:
         pass
 
@@ -445,33 +474,18 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     # automation-id = 'dateSectionMonth-input' and 'dateSectionYear-input'
     # DOM order with checkbox checked:   [WE-From-mo, WE-From-yr,  Edu-From-yr, Edu-To-yr]
     # DOM order with checkbox unchecked: [WE-From-mo, WE-To-mo,   WE-From-yr,  WE-To-yr, Edu-From-yr, Edu-To-yr]
-    cur_yr = str(datetime.now().year)
     try:
-        month_inps = await page.locator("[data-automation-id='dateSectionMonth-input']").all()
-        year_inps  = await page.locator("[data-automation-id='dateSectionYear-input']").all()
-        print(f"          [Exp] date inputs: {len(month_inps)} month, {len(year_inps)} year", flush=True)
-
-        # Work Experience From (always at index 0)
-        if len(month_inps) > 0:
-            await month_inps[0].fill("01")
-        if len(year_inps) > 0:
-            await year_inps[0].fill(start_yr)
-
-        if len(month_inps) > 1:
-            # "I currently work here" not effective — To field still visible
-            await month_inps[1].fill("01")
-            if len(year_inps) > 1:
-                await year_inps[1].fill(cur_yr)
-            edu_yr_i = 2
-        else:
-            edu_yr_i = 1
-
-        # Education: From (start) and To (graduation)
-        edu_from = str(int(grad_yr) - 2)
-        if edu_yr_i < len(year_inps):
-            await year_inps[edu_yr_i].fill(edu_from)
-        if edu_yr_i + 1 < len(year_inps):
-            await year_inps[edu_yr_i + 1].fill(grad_yr)
+        await _wd_fill_date(page, "startDate", start_month, start_yr)
+        if not currently_employed:
+            await _wd_fill_date(page, "endDate", end_month, end_yr)
+        first_year = page.locator("[data-automation-id='formField-firstYearAttended'] [data-automation-id='dateSectionYear-input']").first
+        last_year = page.locator("[data-automation-id='formField-lastYearAttended'] [data-automation-id='dateSectionYear-input']").first
+        if await first_year.count() > 0:
+            await first_year.fill(str(int(grad_yr) - 1))
+        if await last_year.count() > 0:
+            await last_year.fill(grad_yr)
+            await last_year.press("Tab")
+        print(f"          [Exp] Work dates: {start_month}/{start_yr} to {end_month}/{end_yr}", flush=True)
     except Exception as _e:
         print(f"          [Exp] Date fill error: {_e}", flush=True)
 
@@ -482,21 +496,28 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
             container = page.locator(f"[data-automation-id='formField-{sch_aid}']").first
             if await container.count() == 0:
                 continue
-            inp = container.locator("input").first
+            inp = container.locator("input:visible").first
             if await inp.count() == 0:
                 continue
-            await inp.click(force=True)
-            await asyncio.sleep(0.2)
+            await inp.click()
             await inp.fill(school)
             await asyncio.sleep(1.0)
-            # Pick first suggestion if typeahead opens
-            opt = page.locator("[data-automation-id='promptOption']").first
-            if await opt.count() > 0:
+            selected = False
+            school_key = school.lower().replace("university", "").strip()
+            for opt in await page.locator("[data-automation-id='promptOption']:visible, [role='option']:visible").all():
                 try:
-                    await opt.click(timeout=1500)
-                    await asyncio.sleep(0.3)
+                    option_text = (await opt.inner_text()).strip().lower()
+                    if school_key in option_text or option_text in school.lower():
+                        await opt.click()
+                        selected = True
+                        break
                 except Exception:
                     pass
+            if not selected:
+                await inp.press("ArrowDown")
+                await inp.press("Enter")
+            await asyncio.sleep(0.4)
+            print(f"          [Exp] School: {school}", flush=True)
             break
     except Exception:
         pass
@@ -529,7 +550,7 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     if not _deg_filled:
         try:
             container = page.locator("[data-automation-id='formField-degree']").first
-            btn = container.locator("button").first
+            btn = container.locator("button:visible").first
             if await btn.count() > 0:
                 await btn.click(force=True)
                 await asyncio.sleep(0.8)
@@ -561,7 +582,7 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     if not _deg_filled:
         try:
             container = page.locator("[data-automation-id='formField-degree']").first
-            inp = container.locator("input").first
+            inp = container.locator("input:visible").first
             if await inp.count() > 0:
                 await inp.click(force=True)
                 await asyncio.sleep(0.3)
@@ -574,11 +595,17 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
                     "[role='listbox'] li",
                     "li[tabindex]",
                 ):
-                    opt = page.locator(opt_sel).first
-                    if await opt.count() > 0:
-                        await opt.click(force=True)
-                        _deg_filled = True
-                        print(f"          [Exp] Degree S2 typeahead via '{opt_sel}'", flush=True)
+                    for opt in await page.locator(opt_sel).all():
+                        try:
+                            txt = (await opt.inner_text()).strip().lower()
+                            if _deg_kw in txt and await opt.is_visible(timeout=0):
+                                await opt.click(force=True)
+                                _deg_filled = True
+                                print(f"          [Exp] Degree S2 via '{opt_sel}': {txt}", flush=True)
+                                break
+                        except Exception:
+                            pass
+                    if _deg_filled:
                         break
                 if not _deg_filled:
                     await page.keyboard.press("Escape")
@@ -589,9 +616,9 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     if not _deg_filled:
         try:
             container = page.locator("[data-automation-id='formField-degree']").first
-            btn = container.locator("button").first
+            btn = container.locator("button:visible").first
             if await btn.count() == 0:
-                btn = container.locator("input").first
+                btn = container.locator("input:visible").first
             if await btn.count() > 0:
                 await btn.click(force=True)
                 await asyncio.sleep(0.5)
@@ -635,6 +662,14 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
                 await page.keyboard.press("Escape")
         except Exception as _e:
             print(f"          [Exp] Degree S4 error: {_e}", flush=True)
+
+    for field_aid in ("fieldOfStudy", "field-of-study", "major", "discipline"):
+        if await _wd_dropdown(page, field_aid, field_of_study):
+            print(f"          [Exp] Field of study: {field_of_study}", flush=True)
+            break
+        if await _wd_fill_input(page, field_aid, field_of_study):
+            print(f"          [Exp] Field of study: {field_of_study}", flush=True)
+            break
 
     # LinkedIn / website
     await _wd_fill_field(page, "linkedinUrl",  profile.get("linkedin_url", ""))
@@ -2299,25 +2334,15 @@ async def _fill_workday(
     }
 
     async def _detect_step() -> str:
-        """Find current Workday step by scanning text nodes for exact step name matches."""
+        """Find the active Workday step from its visible page heading."""
         _known = list(step_fns.keys()) + ["Review"]
         try:
-            found = await apply_page.evaluate("""
-                (names) => {
-                    // Walk all text nodes; return first that exactly matches a step name
-                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                    let node;
-                    while ((node = walker.nextNode())) {
-                        const t = node.textContent.trim();
-                        if (names.includes(t)) return t;
-                    }
-                    // Fallback: aria-current on any element
-                    const ac = document.querySelector('[aria-current="step"], [aria-current="true"]');
-                    if (ac) return ac.textContent.trim();
-                    return '';
-                }
-            """, _known)
-            return (found or "").strip()
+            for heading in await apply_page.locator("h1:visible, h2:visible, h3:visible").all():
+                text = (await heading.inner_text()).strip()
+                for known in _known:
+                    if text == known or text.startswith(f"{known} "):
+                        return known
+            return ""
         except Exception:
             return ""
 
@@ -2326,6 +2351,11 @@ async def _fill_workday(
     for step_name in step_order:
         fn = step_fns[step_name]
         try:
+            current = await _detect_step()
+            if current == "Review":
+                break
+            if current and current != step_name:
+                continue
             print(f"          [Workday] Step: {step_name}...", flush=True)
             await fn()
             await asyncio.sleep(0.8)
@@ -2337,21 +2367,8 @@ async def _fill_workday(
             # Verify page advanced — if still showing same step name, check for hard errors
             current = await _detect_step()
             if current == step_name:
-                # Collect visible error button labels to surface the real problem
-                err_btns = await apply_page.locator("button[class*='error' i], button").all()
-                err_labels = []
-                for _eb in err_btns:
-                    try:
-                        _t = (await _eb.inner_text()).strip()
-                        if _t.startswith("Error-"):
-                            err_labels.append(_t[6:])
-                    except Exception:
-                        pass
-                if err_labels:
-                    err_str = ", ".join(err_labels[:5])
-                    print(f"          [Workday] ✗ '{step_name}' blocked by required field(s): {err_str}", flush=True)
-                    raise RuntimeError(f"Required field(s) missing on '{step_name}': {err_str}")
-                print(f"          [Workday] ⚠ page still shows '{step_name}' — may have errors", flush=True)
+                print(f"          [Workday] ✗ '{step_name}' has validation errors — stopping", flush=True)
+                return f"error: Workday {step_name} validation failed"
         except Exception as e:
             print(f"          [Workday] {step_name} step warning: {e}", flush=True)
 
@@ -2416,5 +2433,3 @@ async def _fill_workday(
     # Final submit
     print(f"          [Workday] Attempting submit...", flush=True)
     return await _wd_submit(apply_page)
-
-

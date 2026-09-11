@@ -34,6 +34,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 import gmail_sender
+from job_eligibility import early_career_rejection_reason
 
 load_dotenv()
 
@@ -134,6 +135,8 @@ PROFILE_CONTEXT = (
 )
 
 _PROFILE_YEARS: int = 8   # updated per-profile in load_profile()
+_PROFILE_MAX_REQUIRED_YEARS: int = 4
+_PROFILE_EXPERIENCE_LEVELS: list[str] = ["intern", "new_grad", "early_career", "entry"]
 
 stats = {"applied": 0, "skipped": 0, "errors": 0}
 DEBUG_SHOT_TAKEN   = False
@@ -250,7 +253,8 @@ def _prompt_profile_setup(email: str, existing: dict) -> dict:
 
 def load_profile(email: str, force_setup: bool = False):
     """Load per-profile settings; runs interactive setup if any required field is missing."""
-    global PROFILE_CONTEXT, _QUICK_ANSWERS, _PROFILE_YEARS, SENDER_NAME
+    global PROFILE_CONTEXT, _QUICK_ANSWERS, _PROFILE_YEARS
+    global _PROFILE_MAX_REQUIRED_YEARS, _PROFILE_EXPERIENCE_LEVELS, SENDER_NAME
 
     saved: dict = {}
     if PROFILES_JSON.exists():
@@ -265,6 +269,10 @@ def load_profile(email: str, force_setup: bool = False):
         saved = _prompt_profile_setup(email, saved)
 
     _PROFILE_YEARS  = int(saved.get("years_experience", 8))
+    _PROFILE_MAX_REQUIRED_YEARS = int(saved.get("max_required_years", 4))
+    _PROFILE_EXPERIENCE_LEVELS = saved.get(
+        "experience_levels", ["intern", "new_grad", "early_career", "entry"]
+    )
     SENDER_NAME     = saved.get("name", SENDER_NAME)
     PROFILE_CONTEXT = saved.get("summary", PROFILE_CONTEXT)
 
@@ -275,10 +283,15 @@ def load_profile(email: str, force_setup: bool = False):
     open_to_relocation = bool(saved.get("open_to_relocation", False))
     available_to_start = str(saved.get("available_to_start", "2 weeks"))
     expected_salary    = str(saved.get("expected_salary", "Open to discussion"))
+    school              = str(saved.get("school", ""))
+    degree              = str(saved.get("degree", ""))
+    field_of_study      = str(saved.get("field_of_study", saved.get("major", "")))
+    graduation_year     = str(saved.get("graduation_year", ""))
 
     _QUICK_ANSWERS = _build_quick_answers(
         work_auth, needs_sponsorship, _PROFILE_YEARS, location,
         preferred_work, open_to_relocation, available_to_start, expected_salary,
+        school, degree, field_of_study, graduation_year,
     )
 
     auth_str = "needs sponsorship" if needs_sponsorship else "no sponsorship needed"
@@ -377,6 +390,8 @@ def _build_quick_answers(
     work_auth: str, needs_sponsorship: bool, years_exp: int, location: str,
     preferred_work: str = "Remote", open_to_relocation: bool = False,
     available_to_start: str = "2 weeks", expected_salary: str = "Open to discussion",
+    school: str = "", degree: str = "", field_of_study: str = "",
+    graduation_year: str = "",
 ) -> list[tuple[list[str], str]]:
     """Build profile-specific quick-answer lookup table."""
     is_citizen    = work_auth in ("USC", "US_CITIZEN", "CITIZEN")
@@ -423,6 +438,19 @@ def _build_quick_answers(
         (["expected salary", "desired salary", "salary expectation",
           "compensation expectation", "salary range"],
          expected_salary),
+
+        (["field of study", "area of study", "major", "discipline",
+          "concentration", "program of study"],
+         field_of_study),
+
+        (["degree type", "type of degree", "highest degree", "education level"],
+         degree),
+
+        (["school", "university", "college", "education institution"],
+         school),
+
+        (["graduation year", "expected graduation", "year of graduation"],
+         graduation_year),
     ]
 
 
@@ -1734,6 +1762,16 @@ async def process_jobs(page: Page, cards: list[dict]):
         url      = card["url"]
         label    = f"[{idx}/{total}]"
 
+        rejection_reason = early_career_rejection_reason(
+            title, max_required_years=_PROFILE_MAX_REQUIRED_YEARS,
+            allowed_levels=_PROFILE_EXPERIENCE_LEVELS,
+        )
+        if rejection_reason:
+            print(f"  {label} ⏭️  Skipped: {title[:65]} — {rejection_reason}")
+            log_application(title, company, location, url, f"skipped - {rejection_reason}")
+            stats["skipped"] += 1
+            continue
+
         # ── Tracker: skip only what THIS profile already applied ──────────
         if url in APPLIED_URLS:
             print(f"  {label} ⏭️  Skipped: {title[:65]} — already applied")
@@ -1747,6 +1785,20 @@ async def process_jobs(page: Page, cards: list[dict]):
             print(f"  {label} ❌  Navigation failed: {title[:65]}")
             log_application(title, company, location, url, "error: navigation failed")
             stats["errors"] += 1
+            continue
+
+        try:
+            description = await page.locator("body").inner_text(timeout=5000)
+        except Exception:
+            description = ""
+        rejection_reason = early_career_rejection_reason(
+            title, description, _PROFILE_MAX_REQUIRED_YEARS,
+            _PROFILE_EXPERIENCE_LEVELS,
+        )
+        if rejection_reason:
+            print(f"  {label} ⏭️  Skipped: {title[:65]} — {rejection_reason}")
+            log_application(title, company, location, url, f"skipped - {rejection_reason}")
+            stats["skipped"] += 1
             continue
 
         # Resolve company from the job detail page (search cards often miss it)
@@ -1924,7 +1976,9 @@ def prompt_settings() -> dict:
 
 
 async def run(profile_email: str = "", query: str | None = None,
-              posted_date: str | None = None, easy_apply: bool | None = None):
+              posted_date: str | None = None, easy_apply: bool | None = None,
+              experience_levels: list[str] | None = None,
+              max_required_years: int | None = None):
     caps = detect_capabilities()
     print_capabilities(caps)
 
@@ -1968,12 +2022,16 @@ async def run(profile_email: str = "", query: str | None = None,
     profile_email = settings["profile_email"]
 
     # Per-profile CSV and tracker
-    global CSV_FILE, DICE_EMAIL
+    global CSV_FILE, DICE_EMAIL, _PROFILE_EXPERIENCE_LEVELS, _PROFILE_MAX_REQUIRED_YEARS
     DICE_EMAIL = profile_email or DICE_EMAIL   # override with profile-specific email
     CSV_FILE = session_dir / "applied_jobs.csv"
     ensure_csv()
     load_applied_urls()
     load_profile(DICE_EMAIL, force_setup="--setup" in sys.argv)
+    if experience_levels is not None:
+        _PROFILE_EXPERIENCE_LEVELS = experience_levels
+    if max_required_years is not None:
+        _PROFILE_MAX_REQUIRED_YEARS = max(0, min(4, max_required_years))
     gmail_sender.init_gmail(session_dir, sender_name=SENDER_NAME,
                             sender_email=DICE_EMAIL, resume_path=RESUME_PATH)
 
@@ -2148,6 +2206,8 @@ if __name__ == "__main__":
     ap.add_argument("--query",   default="")
     ap.add_argument("--date",    default="")
     ap.add_argument("--easy-apply", dest="easy_apply", default=None)
+    ap.add_argument("--experience-levels", default="")
+    ap.add_argument("--max-required-years", type=int, default=None)
     args, _ = ap.parse_known_args()
 
     if args.login:
@@ -2157,6 +2217,9 @@ if __name__ == "__main__":
                         query=args.query or None,
                         posted_date=args.date or None,
                         easy_apply=(args.easy_apply.lower() in ("true","yes","1")
-                                    if args.easy_apply is not None else None)))
+                                    if args.easy_apply is not None else None),
+                        experience_levels=([level for level in args.experience_levels.split(",") if level]
+                                           if args.experience_levels else None),
+                        max_required_years=args.max_required_years))
     else:
         asyncio.run(run())

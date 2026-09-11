@@ -6007,23 +6007,27 @@ async def _wd_voluntary(page: Page, profile: dict = None) -> None:
     for aid, (kws, skip_kw) in _field_map.items():
         ff = page.locator(f"[data-automation-id='formField-{aid}']").first
         if await ff.count() == 0:
+            print(f"          [VD] Strat1 {aid}: formField not found on page — skipping", flush=True)
             continue
         btn = ff.locator("button").first
         if await btn.count() == 0:
+            print(f"          [VD] Strat1 {aid}: formField found but no button inside — skipping", flush=True)
             continue
         cur_text = (await btn.inner_text()).strip().lower()
+        print(f"          [VD] Strat1 {aid}: current value='{cur_text[:60]}' | want={kws} | skip='{skip_kw}'", flush=True)
         # Already set correctly
         if any(w in cur_text for w in kws) and (skip_kw is None or skip_kw not in cur_text):
-            print(f"          [VD] Strat1 {aid} already set: '{cur_text[:40]}'", flush=True)
+            print(f"          [VD] Strat1 {aid}: ✓ already correct — not changing", flush=True)
             continue
+        print(f"          [VD] Strat1 {aid}: clicking dropdown button...", flush=True)
         try:
             await btn.scroll_into_view_if_needed()
         except Exception:
             pass
         await btn.click(force=True)
-        await asyncio.sleep(1.2)   # give Workday time to render the dropdown
 
-        # Use Playwright locators (pierce shadow DOM unlike querySelectorAll)
+        # After clicking, use wait_for_selector to catch options as soon as they appear
+        # (polling every 0.5s misses fast-appearing dropdowns)
         _option_sels = [
             "[data-automation-id='promptOption']",
             "[role='option']",
@@ -6034,23 +6038,66 @@ async def _wd_voluntary(page: Page, profile: dict = None) -> None:
         ]
         _pw_opts = []
         _used_opt_sel = None
+        _cnt = 0
+
+        # Strategy A: wait_for_selector (reacts as soon as element appears, up to 4s)
         for _opt_sel in _option_sels:
-            _loc = page.locator(_opt_sel)
-            _cnt = await _loc.count()
-            if _cnt > 0:
-                _pw_opts = await _loc.all()
-                _used_opt_sel = _opt_sel
-                break
-        print(f"          [VD] Strat1 {aid} dropdown options ({_used_opt_sel}): {_cnt if _pw_opts else 0}", flush=True)
+            try:
+                await page.wait_for_selector(_opt_sel, timeout=4000, state="visible")
+                _loc = page.locator(_opt_sel)
+                _cnt = await _loc.count()
+                if _cnt > 0:
+                    _pw_opts = await _loc.all()
+                    _used_opt_sel = _opt_sel
+                    print(f"          [VD] Strat1 {aid}:   wait_for_selector '{_opt_sel}' → {_cnt} elements", flush=True)
+                    break
+            except Exception:
+                pass  # timeout — try next selector
+
+        # Strategy B: if still 0, try clicking the visible button of the field (not force)
+        if not _pw_opts:
+            print(f"          [VD] Strat1 {aid}:   no options via wait_for_selector — retrying with normal click", flush=True)
+            try:
+                await btn.click()  # normal click (not force) — different event sequence
+                for _opt_sel in _option_sels:
+                    try:
+                        await page.wait_for_selector(_opt_sel, timeout=3000, state="visible")
+                        _loc = page.locator(_opt_sel)
+                        _cnt = await _loc.count()
+                        if _cnt > 0:
+                            _pw_opts = await _loc.all()
+                            _used_opt_sel = _opt_sel
+                            print(f"          [VD] Strat1 {aid}:   normal click → '{_opt_sel}' {_cnt} opts", flush=True)
+                            break
+                    except Exception:
+                        pass
+            except Exception as _nc_e:
+                print(f"          [VD] Strat1 {aid}:   normal click error: {_nc_e}", flush=True)
+
+        # Log all selectors for debugging when options are still missing
+        if not _pw_opts:
+            print(f"          [VD] Strat1 {aid}: ✗ 0 options after all wait attempts — current counts:", flush=True)
+            for _opt_sel in _option_sels:
+                try:
+                    _c = await page.locator(_opt_sel).count()
+                    print(f"          [VD] Strat1 {aid}:   '{_opt_sel}' → {_c}", flush=True)
+                except Exception:
+                    pass
+            await page.keyboard.press("Escape")  # close any open dropdown
+        else:
+            print(f"          [VD] Strat1 {aid}: using selector '{_used_opt_sel}' with {len(_pw_opts)} options", flush=True)
 
         picked = False
         first_real = None
-        for _opt in _pw_opts:
+        for _i, _opt in enumerate(_pw_opts):
             try:
                 t = (await _opt.inner_text()).strip().lower()
+                print(f"          [VD] Strat1 {aid}:   option[{_i}]='{t[:70]}' | skip_kw='{skip_kw}' | want={kws}", flush=True)
                 if not t or t in ("select one", "-- select --"):
+                    print(f"          [VD] Strat1 {aid}:   → skipping placeholder", flush=True)
                     continue
                 if skip_kw and skip_kw in t:
+                    print(f"          [VD] Strat1 {aid}:   → skipping (contains skip_kw '{skip_kw}')", flush=True)
                     continue
                 if first_real is None:
                     first_real = _opt
@@ -6059,36 +6106,47 @@ async def _wd_voluntary(page: Page, profile: dict = None) -> None:
                     t == w or t.startswith(w + " ") or t.endswith(" " + w) or f" {w} " in f" {t} "
                     for w in kws
                 )
-                if exact or any(w in t for w in kws):
+                kw_match = any(w in t for w in kws)
+                if exact or kw_match:
+                    print(f"          [VD] Strat1 {aid}:   → MATCH (exact={exact} kw={kw_match}) clicking '{t[:60]}'", flush=True)
                     await _opt.click(force=True)
-                    print(f"          [VD] Strat1 {aid} → '{t[:50]}'", flush=True)
                     picked = True
                     break
-            except Exception:
-                pass
+                else:
+                    print(f"          [VD] Strat1 {aid}:   → no keyword match", flush=True)
+            except Exception as _oe:
+                print(f"          [VD] Strat1 {aid}:   option[{_i}] error: {_oe}", flush=True)
+
         if not picked and first_real is not None:
+            _fr_text = (await first_real.inner_text()).strip()
+            print(f"          [VD] Strat1 {aid}: no keyword match — falling back to first real option: '{_fr_text[:60]}'", flush=True)
             try:
                 await first_real.click(force=True)
                 picked = True
-            except Exception:
-                pass
+            except Exception as _fe:
+                print(f"          [VD] Strat1 {aid}: fallback click error: {_fe}", flush=True)
 
-        if not picked:
+        if not picked and not _pw_opts:
             # Last resort: keyboard navigation — type the value and press Enter
+            print(f"          [VD] Strat1 {aid}: no options found — trying keyboard type '{kws[0]}'", flush=True)
             try:
                 await page.keyboard.type(kws[0].title(), delay=50)
                 await asyncio.sleep(0.4)
                 _kb_opts = await page.locator("[role='option']").all()
+                print(f"          [VD] Strat1 {aid}: keyboard → {len(_kb_opts)} [role=option] appeared", flush=True)
                 if _kb_opts:
+                    _kb_t = (await _kb_opts[0].inner_text()).strip()
+                    print(f"          [VD] Strat1 {aid}: clicking keyboard option[0]='{_kb_t[:60]}'", flush=True)
                     await _kb_opts[0].click(force=True)
                     picked = True
                 else:
                     await page.keyboard.press("Enter")
                     picked = True
-            except Exception:
+            except Exception as _ke:
+                print(f"          [VD] Strat1 {aid}: keyboard fallback error: {_ke}", flush=True)
                 await page.keyboard.press("Escape")
 
-        print(f"          [VD] Strat1 {aid} → {'ok' if picked else 'escaped'}", flush=True)
+        print(f"          [VD] Strat1 {aid}: RESULT → {'✓ picked' if picked else '✗ FAILED — not selected'}", flush=True)
         await asyncio.sleep(0.3)
 
     # Strategy 2: scan remaining "Select One" buttons, re-query after each answer
@@ -7096,30 +7154,42 @@ async def _fill_workday(
         elif await apply_page.locator("input[placeholder*='MM/DD/YYYY'], input[placeholder='MM/DD/YYYY']").count() > 0:
             _cc305 = True
         if _cc305:
-            print(f"          [Workday] CC-305 form detected — filling disability + Name + Date", flush=True)
+            print(f"          [Workday] ══════ CC-305 FORM DETECTED ══════", flush=True)
+            print(f"          [Workday] CC-305: starting disability radio + Name + Date fill", flush=True)
 
             # ── Disability checkbox/radio ─────────────────────────────────
             # Scroll to the disability section by locating text near it, then use
             # Playwright locators (which pierce shadow DOM, unlike querySelectorAll).
+            # ── scroll to disability section (separate try so failure doesn't block radio search)
             try:
-                # Try to scroll to the disability question header
-                _dis_header = apply_page.locator(
-                    "text=/disability|please check/i, [data-automation-id*='disability' i]"
-                ).first
-                if await _dis_header.count() > 0:
+                # Use separate locators — cannot mix text regex and CSS in one comma-separated locator
+                _dis_header = apply_page.locator("text=/disability/i").first
+                _dis_header_cnt = await _dis_header.count()
+                print(f"          [Workday] CC-305: disability header locator count={_dis_header_cnt}", flush=True)
+                if _dis_header_cnt > 0:
+                    print(f"          [Workday] CC-305: scrolling to disability header...", flush=True)
                     await _dis_header.scroll_into_view_if_needed()
                 else:
+                    print(f"          [Workday] CC-305: no header found — scrolling to page bottom", flush=True)
                     await apply_page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(1.0)
+            except Exception as _scroll_e:
+                print(f"          [Workday] CC-305: scroll error (non-fatal): {_scroll_e} — scrolling to bottom", flush=True)
+                await apply_page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(1.0)
 
+            # ── disability radio selection (own try block so scroll error can't skip this)
+            _dis_picked = False
+            try:
                 _dis_decline_kws = (
                     "i don't wish", "i do not wish", "prefer not", "choose not",
                     "no, i don't", "no disability", "i do not have",
                     "i am not", "does not apply", "decline",
                 )
+                print(f"          [Workday] CC-305: decline keywords = {_dis_decline_kws}", flush=True)
 
                 # Playwright locators pierce shadow DOM — try each element type in order
                 _dis_els: list = []
+                _dis_sel_used = None
                 for _dis_sel in (
                     "input[type='radio']",
                     "[role='radio']",
@@ -7128,98 +7198,130 @@ async def _fill_workday(
                 ):
                     _loc = apply_page.locator(_dis_sel)
                     _cnt = await _loc.count()
+                    print(f"          [Workday] CC-305:   selector '{_dis_sel}' → {_cnt} elements", flush=True)
                     if _cnt > 0:
                         _dis_els = await _loc.all()
-                        print(f"          [Workday] CC-305 disability found {_cnt} {_dis_sel} elements", flush=True)
+                        _dis_sel_used = _dis_sel
                         break
 
-                _dis_picked = False
+                print(f"          [Workday] CC-305: using selector '{_dis_sel_used}' — {len(_dis_els)} total elements", flush=True)
+
                 # First pass: look for decline/no-disability keywords via label text
-                for _el in _dis_els:
+                for _i, _el in enumerate(_dis_els):
                     try:
                         _eid = await _el.get_attribute("id") or ""
+                        _is_checked = await _el.is_checked() if _dis_sel_used and "input" in (_dis_sel_used or "") else False
                         _lbl = apply_page.locator(f"label[for='{_eid}']").first if _eid else None
                         _lbl_text = (await _lbl.inner_text() if _lbl and await _lbl.count() > 0 else "").strip().lower()
                         if not _lbl_text:
-                            # Try aria-label or parent text
                             _lbl_text = (
                                 await _el.get_attribute("aria-label") or
                                 await _el.evaluate("el => el.closest('label')?.textContent || el.parentElement?.textContent || ''")
                             ).strip().lower()
-                        print(f"          [Workday] CC-305 candidate: '{_lbl_text[:70]}'", flush=True)
-                        if any(k in _lbl_text for k in _dis_decline_kws):
+                        _kw_hit = [k for k in _dis_decline_kws if k in _lbl_text]
+                        print(f"          [Workday] CC-305:   element[{_i}] id='{_eid}' checked={_is_checked} text='{_lbl_text[:80]}' | kw_hits={_kw_hit}", flush=True)
+                        if _kw_hit:
+                            print(f"          [Workday] CC-305:   → MATCH on '{_kw_hit[0]}' — clicking...", flush=True)
                             await _el.scroll_into_view_if_needed()
                             await _el.click(force=True)
-                            print(f"          [Workday] CC-305 disability → '{_lbl_text[:60]}'", flush=True)
+                            print(f"          [Workday] CC-305: ✓ disability selected → '{_lbl_text[:60]}'", flush=True)
                             _dis_picked = True
                             break
-                    except Exception:
-                        pass
+                        else:
+                            print(f"          [Workday] CC-305:   → no decline keyword match — skipping", flush=True)
+                    except Exception as _ee:
+                        print(f"          [Workday] CC-305:   element[{_i}] error: {_ee}", flush=True)
 
                 # Fallback: click last available element
                 if not _dis_picked and _dis_els:
+                    print(f"          [Workday] CC-305: no keyword match — fallback: clicking last element", flush=True)
                     try:
                         _last_el = _dis_els[-1]
                         await _last_el.scroll_into_view_if_needed()
                         await _last_el.click(force=True)
-                        print(f"          [Workday] CC-305 disability → fallback last element", flush=True)
+                        print(f"          [Workday] CC-305: ✓ disability fallback last element clicked", flush=True)
                         _dis_picked = True
-                    except Exception:
-                        pass
+                    except Exception as _fe:
+                        print(f"          [Workday] CC-305: fallback click error: {_fe}", flush=True)
 
-                if _dis_picked:
-                    await asyncio.sleep(0.5)
-                    # Scroll back to top so name/date fields are visible
-                    await apply_page.evaluate("window.scrollTo(0, 0)")
-                    await asyncio.sleep(0.3)
-                else:
-                    print(f"          [Workday] CC-305 disability: no element selected (found {len(_dis_els)})", flush=True)
+                if not _dis_els:
+                    print(f"          [Workday] CC-305: ✗ FAILED — 0 radio/checkbox elements found on page", flush=True)
+                elif not _dis_picked:
+                    print(f"          [Workday] CC-305: ✗ FAILED — found {len(_dis_els)} elements but none selected", flush=True)
             except Exception as _de:
-                print(f"          [Workday] CC-305 disability error: {_de}", flush=True)
+                print(f"          [Workday] CC-305 disability exception: {_de}", flush=True)
+
+            if _dis_picked:
+                await asyncio.sleep(0.5)
+                await apply_page.evaluate("window.scrollTo(0, 0)")
+                await asyncio.sleep(0.3)
 
             # Name field
             name_val = profile.get("name", "")
+            print(f"          [Workday] CC-305: filling Name='{name_val}'...", flush=True)
             if name_val:
                 name_inp = apply_page.locator("[data-automation-id='formField-name'] input").first
-                if await name_inp.count() == 0:
+                _name_cnt = await name_inp.count()
+                print(f"          [Workday] CC-305:   [data-automation-id=formField-name] input count={_name_cnt}", flush=True)
+                if _name_cnt == 0:
+                    print(f"          [Workday] CC-305:   scanning all text inputs for empty one...", flush=True)
                     for _t_inp in await apply_page.locator("input[type='text']").all():
                         try:
-                            if not await _t_inp.input_value():
+                            _val = await _t_inp.input_value()
+                            if not _val:
                                 name_inp = _t_inp
+                                print(f"          [Workday] CC-305:   found empty text input, using it", flush=True)
                                 break
                         except Exception:
                             pass
-                if await name_inp.count() > 0 and not await name_inp.input_value():
+                _cur_name = await name_inp.input_value() if await name_inp.count() > 0 else "N/A"
+                print(f"          [Workday] CC-305:   current name field value='{_cur_name}'", flush=True)
+                if await name_inp.count() > 0 and not _cur_name:
                     await name_inp.fill(name_val)
-                    print(f"          [Workday] CC-305 Name → '{name_val}'", flush=True)
+                    print(f"          [Workday] CC-305: ✓ Name filled → '{name_val}'", flush=True)
+                else:
+                    print(f"          [Workday] CC-305:   Name already filled or field not found — skipping", flush=True)
+
             # Date field
             from datetime import date as _dt_cc
             _today = _dt_cc.today()
             _date_str = _today.strftime('%m/%d/%Y')
+            print(f"          [Workday] CC-305: filling Date={_date_str}...", flush=True)
             _date_ff = apply_page.locator("[data-automation-id='formField-dateSignedOn']").first
+            _date_ff_cnt = await _date_ff.count()
+            print(f"          [Workday] CC-305:   formField-dateSignedOn count={_date_ff_cnt}", flush=True)
             _date_done = False
-            if await _date_ff.count() > 0:
+            if _date_ff_cnt > 0:
                 for _seg, _v in (("dateSectionMonth-input", str(_today.month).zfill(2)),
                                   ("dateSectionDay-input",   str(_today.day).zfill(2)),
                                   ("dateSectionYear-input",  str(_today.year))):
                     _seg_inp = _date_ff.locator(f"[data-automation-id='{_seg}']").first
-                    if await _seg_inp.count() > 0:
+                    _seg_cnt = await _seg_inp.count()
+                    print(f"          [Workday] CC-305:   date segment '{_seg}' count={_seg_cnt}", flush=True)
+                    if _seg_cnt > 0:
                         await _seg_inp.fill(_v)
+                        print(f"          [Workday] CC-305:   → filled '{_seg}'='{_v}'", flush=True)
                         _date_done = True
             if not _date_done:
+                print(f"          [Workday] CC-305:   segment fill failed — trying generic date input...", flush=True)
                 for _di in await apply_page.locator(
                     "input[placeholder*='MM'], input[placeholder*='date' i], input[type='date']"
                 ).all():
                     try:
                         await _di.fill(_date_str)
                         _date_done = True
-                        print(f"          [Workday] CC-305 Date → {_date_str}", flush=True)
+                        print(f"          [Workday] CC-305: ✓ Date filled via generic input → {_date_str}", flush=True)
                         break
                     except Exception:
                         pass
+            if not _date_done:
+                print(f"          [Workday] CC-305: ✗ Date fill FAILED — no date input found", flush=True)
+
+            print(f"          [Workday] CC-305: clicking Next to advance past CC-305...", flush=True)
             # Advance past CC-305 to Review
             await _wd_next(apply_page)
             await asyncio.sleep(1.5)
+            print(f"          [Workday] ══════ CC-305 HANDLER DONE ══════", flush=True)
     except Exception as _cc_e:
         print(f"          [Workday] CC-305 handler: {_cc_e}", flush=True)
 

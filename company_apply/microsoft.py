@@ -122,7 +122,7 @@ def microsoft_list_jobs(keywords: list = None, num: int = 50) -> list:
 # ── Helper: fill a plain text input by element ID ─────────────────────────────
 
 async def _ms_fill(page: Page, field_id: str, value: str) -> bool:
-    """Triple-click + fill a text/tel input by ID."""
+    """Click + fill a text/tel input by ID (fill() clears existing content)."""
     _log.fn("_ms_fill", field_id=field_id, value=value[:60] if value else None)
     if not value:
         _log.skip(f"_ms_fill: empty value for {field_id!r}")
@@ -132,7 +132,7 @@ async def _ms_fill(page: Page, field_id: str, value: str) -> bool:
         if not await el.count():
             _log.null(field_id, reason="element not found on page")
             return False
-        await el.triple_click()
+        await el.click()
         await el.fill(value)
         _log.browser("fill", f"#{field_id}", value=value[:60], result="ok")
         return True
@@ -212,17 +212,22 @@ async def _ms_select(page: Page, field_id: str, value: str) -> bool:
 # ── Helper: check a checkbox by ID if not already checked ─────────────────────
 
 async def _ms_check(page: Page, locator_str: str, label: str = "") -> bool:
-    """Check a checkbox/radio that is not yet checked."""
+    """Check a checkbox/radio/toggle that is not yet checked.
+    Falls back to click() for custom toggle elements."""
     _log.fn("_ms_check", locator=locator_str, label=label[:60] if label else "")
     try:
         el = page.locator(locator_str).first
         if not await el.count():
             _log.null(locator_str, reason="checkbox not found")
             return False
-        if await el.is_checked():
-            _log.skip(f"_ms_check: already checked — {label or locator_str}")
-            return True
-        await el.check()
+        try:
+            if await el.is_checked():
+                _log.skip(f"_ms_check: already checked — {label or locator_str}")
+                return True
+            await el.check()
+        except Exception:
+            # Custom toggle / non-native checkbox — fall back to click
+            await el.click()
         _log.browser("check", locator_str, result="ok")
         return True
     except Exception as exc:
@@ -409,11 +414,15 @@ async def _fill_microsoft(page: Page, profile: dict, email: str,
     _log.step("Microsoft: Step 2 — Resume upload")
     if resume and resume.is_file():
         try:
-            file_input = page.locator("#Resume_resume, input[type=file]").first
+            # The visible #Resume_resume is a <div> wrapper — find the nested <input type=file>
+            file_input = page.locator(
+                "#Resume_resume input[type=file], input[type=file][id*='resume' i], "
+                "input[type=file][name*='resume' i], input[type=file]"
+            ).first
             if await file_input.count():
                 await file_input.set_input_files(str(resume))
                 _log.ok(f"Resume uploaded: {resume.name}")
-                await asyncio.sleep(2.5)  # wait for upload to process
+                await asyncio.sleep(2.5)
             else:
                 _log.warn("Resume file input not found")
         except Exception as exc:
@@ -558,11 +567,18 @@ async def _fill_microsoft(page: Page, profile: dict, email: str,
         full_name,
     )
     try:
-        today_str = date.today().strftime("%m/%d/%Y")
         date_el = page.locator("#Self_identification___US_Puerto_Rico_instr4date").first
         if await date_el.count():
-            await date_el.fill(today_str)
-            _log.browser("fill", "#...instr4date", value=today_str, result="ok")
+            existing = await date_el.input_value()
+            if existing:
+                _log.skip(f"Disability date already filled: {existing}")
+            else:
+                # Field is readonly — click to open calendar picker, then type
+                today_str = date.today().strftime("%m/%d/%Y")
+                await date_el.click()
+                await asyncio.sleep(0.5)
+                await page.keyboard.type(today_str)
+                _log.browser("type", "#...instr4date", value=today_str, result="ok")
     except Exception as exc:
         _log.warn(f"Disability date fill: {exc}")
 

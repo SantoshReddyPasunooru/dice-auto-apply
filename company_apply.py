@@ -6740,12 +6740,15 @@ async def _wd_self_identify(page: Page, profile: dict = None) -> None:
 async def _wd_submit(page: Page) -> str:
     """
     Click the final Submit button on Workday's Review step.
-    Prints all visible buttons + URL before clicking so we can debug what's actually on screen.
-    Uses URL change as the primary signal that submission happened.
+    Multi-step: advances through Next pages (CC-305 → Review → Submit) up to 8 hops.
+    Retries each click up to 3 times with increasing waits before giving up.
     """
+    _WD_WAIT = 15  # seconds to wait after each Workday button click
     _confirm_words = ("thank you", "application submitted", "application received",
                       "we'll be in touch", "your application", "successfully submitted",
                       "application complete")
+    _submit_aids = ("saveAndSubmitButton", "submitButton", "submit-btn")
+    _next_aids   = ("pageFooterNextButton", "bottom-navigation-next-btn")
 
     await _wd_wait_ready(page, timeout=8000)
 
@@ -6756,7 +6759,7 @@ async def _wd_submit(page: Page) -> str:
         heading = await page.locator("h1, h2, [data-automation-id='headingSectionTitle']").first.inner_text()
         print(f"          [Submit] Page heading: {heading.strip()[:80]}", flush=True)
     except Exception:
-        url_before = ""
+        url_before = page.url
     try:
         all_btns = await page.locator("button, [role='button']").all()
         btn_labels = []
@@ -6781,57 +6784,122 @@ async def _wd_submit(page: Page) -> str:
     except Exception:
         pass
 
-    # --- Attempt submit ---
-    _confirm_words = ("thank you", "application submitted", "application received",
-                      "we'll be in touch", "your application", "successfully submitted",
-                      "application complete")
-
-    all_aids = ("saveAndSubmitButton", "submitButton", "submit-btn",
-                "pageFooterNextButton", "bottom-navigation-next-btn")
-
-    for aid in all_aids:
-        try:
-            btn = page.locator(f"[data-automation-id='{aid}']").first
-            if await btn.count() == 0 or not await btn.is_visible(timeout=2000):
+    async def _click_with_retry(btn, label: str, max_clicks: int = 3) -> str:
+        """Click a button up to max_clicks times; return 'applied', 'url_changed', or 'unchanged'."""
+        for attempt in range(max_clicks):
+            wait = _WD_WAIT + attempt * 5  # 15, 20, 25 seconds
+            url_snap = page.url
+            try:
+                await btn.click()
+            except Exception as _ce:
+                print(f"          [Submit] Click error on '{label}' attempt {attempt+1}: {_ce}", flush=True)
+                await asyncio.sleep(wait)
                 continue
-            btn_text = (await btn.inner_text()).strip().lower()
-            url_before = page.url
-            await btn.click()
-            await asyncio.sleep(SUBMIT_WAIT)
-
-            # Primary check: did the URL change? (Workday redirects on successful submit)
-            url_after = page.url
-            if url_after != url_before:
-                print(f"          [Submit] URL changed → {url_after[:80]}", flush=True)
+            print(f"          [Submit] Clicked '{label}' (attempt {attempt+1}), waiting {wait}s...", flush=True)
+            await asyncio.sleep(wait)
+            try:
                 body = (await page.inner_text("body")).lower()
                 if any(w in body for w in _confirm_words):
                     return "applied"
-                return f"submitted (unconfirmed — url changed after '{btn_text}')"
+            except Exception:
+                pass
+            if page.url != url_snap:
+                return "url_changed"
+            print(f"          [Submit] URL unchanged after attempt {attempt+1}, retrying...", flush=True)
+        return "unchanged"
 
-            # Secondary check: confirmation words in body
+    # Multi-step loop: advance through Next pages until Submit succeeds
+    for step in range(8):
+        await _wd_wait_ready(page, timeout=8000)
+
+        # Check if we're already on a confirmation page
+        try:
             body = (await page.inner_text("body")).lower()
             if any(w in body for w in _confirm_words):
                 return "applied"
-
-            # URL didn't change and no confirmation — the click didn't submit
-            print(f"          [Submit] Clicked '{btn_text}' but URL unchanged — not submitted", flush=True)
         except Exception:
             pass
 
-    # Broad fallback
-    try:
-        for sel in ("button[type='submit']", "[aria-label*='submit' i]"):
-            btn = page.locator(sel).last
-            if await btn.count() > 0 and await btn.is_visible(timeout=2000):
-                url_before = page.url
-                await btn.click()
-                await asyncio.sleep(SUBMIT_WAIT)
-                if page.url != url_before:
-                    return "submitted (unconfirmed — url changed)"
-    except Exception:
-        pass
+        # Priority 1: try Submit buttons (click with retry)
+        for aid in _submit_aids:
+            try:
+                btn = page.locator(f"[data-automation-id='{aid}']").first
+                if await btn.count() == 0 or not await btn.is_visible(timeout=2000):
+                    continue
+                btn_text = (await btn.inner_text()).strip()
+                print(f"          [Submit] Step {step+1}: Submit button '{btn_text}' [{aid}]", flush=True)
+                result = await _click_with_retry(btn, btn_text)
+                if result == "applied":
+                    return "applied"
+                if result == "url_changed":
+                    url_after = page.url
+                    print(f"          [Submit] URL changed → {url_after[:80]}", flush=True)
+                    try:
+                        body = (await page.inner_text("body")).lower()
+                        if any(w in body for w in _confirm_words):
+                            return "applied"
+                    except Exception:
+                        pass
+                    return f"submitted (unconfirmed — url changed after '{btn_text}')"
+                # All retries exhausted but no URL change — try next aid
+            except Exception:
+                pass
 
-    # Recovery: if still on error page, check for CC-305 disability radio not selected
+        # Priority 2: CSS submit fallback
+        try:
+            for sel in ("button[type='submit']", "[aria-label*='submit' i]"):
+                btn = page.locator(sel).last
+                if await btn.count() > 0 and await btn.is_visible(timeout=2000):
+                    btn_text = (await btn.inner_text()).strip() or sel
+                    print(f"          [Submit] Step {step+1}: CSS fallback '{btn_text}'", flush=True)
+                    result = await _click_with_retry(btn, btn_text)
+                    if result == "applied":
+                        return "applied"
+                    if result == "url_changed":
+                        return "submitted (unconfirmed — url changed via CSS fallback)"
+                    break
+        except Exception:
+            pass
+
+        # Priority 3: Next button — advance to the next page (e.g., CC-305 → Review)
+        advanced = False
+        for aid in _next_aids:
+            try:
+                btn = page.locator(f"[data-automation-id='{aid}']").first
+                if await btn.count() == 0 or not await btn.is_visible(timeout=2000):
+                    continue
+                btn_text = (await btn.inner_text()).strip()
+                print(f"          [Submit] Step {step+1}: Advancing with Next '{btn_text}' [{aid}]", flush=True)
+                url_snap = page.url
+                await btn.click()
+                await asyncio.sleep(_WD_WAIT)
+                url_after = page.url
+                if url_after != url_snap:
+                    print(f"          [Submit] Moved to → {url_after[:80]}", flush=True)
+                else:
+                    print(f"          [Submit] URL unchanged after Next — page may have updated in-place", flush=True)
+                    # Try clicking again once more
+                    await btn.click()
+                    await asyncio.sleep(_WD_WAIT)
+                    if page.url != url_snap:
+                        print(f"          [Submit] URL changed on 2nd Next click → {page.url[:80]}", flush=True)
+                # Check confirmation after advancing
+                try:
+                    body = (await page.inner_text("body")).lower()
+                    if any(w in body for w in _confirm_words):
+                        return "applied"
+                except Exception:
+                    pass
+                advanced = True
+                break
+            except Exception:
+                pass
+
+        if not advanced:
+            # No submit or next buttons found — try CC-305 error recovery
+            break
+
+    # Recovery: CC-305 disability radio not selected
     try:
         has_error = await page.locator("button:has-text('Errors Found')").count() > 0
         has_cc305 = (
@@ -6857,17 +6925,20 @@ async def _wd_submit(page: Page) -> str:
                         break
                 except Exception:
                     pass
-            # Retry next button
             for _nxt_aid in ("pageFooterNextButton", "saveAndSubmitButton", "submitButton"):
                 _nb = page.locator(f"[data-automation-id='{_nxt_aid}']").first
                 if await _nb.count() > 0 and await _nb.is_visible(timeout=2000):
-                    url_before = page.url
-                    await _nb.click()
-                    await asyncio.sleep(SUBMIT_WAIT)
-                    if page.url != url_before:
-                        body = (await page.inner_text("body")).lower()
-                        if any(w in body for w in _confirm_words):
-                            return "applied"
+                    btn_text = (await _nb.inner_text()).strip()
+                    result = await _click_with_retry(_nb, btn_text)
+                    if result == "applied":
+                        return "applied"
+                    if result == "url_changed":
+                        try:
+                            body = (await page.inner_text("body")).lower()
+                            if any(w in body for w in _confirm_words):
+                                return "applied"
+                        except Exception:
+                            pass
                         return "submitted (unconfirmed — recovered from CC-305 error)"
                     break
     except Exception as _re:
@@ -7589,8 +7660,43 @@ async def apply_to_company(
             return
 
         applied = skipped = errors = 0
+        _ctx_dead = False  # set True when the entire browser process crashes
 
         for i, job in enumerate(jobs, 1):
+            # Relaunch browser if previous job caused a full crash
+            if _ctx_dead:
+                import subprocess as _sp2
+                _sp2.run(["pkill", "-f", "Google Chrome for Testing"], capture_output=True)
+                import time as _t2; _t2.sleep(1)
+                for _lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                    (user_data / _lock).unlink(missing_ok=True)
+                try:
+                    await ctx.close()
+                except Exception:
+                    pass
+                print(f"  [Browser] Relaunching fresh browser after crash...", flush=True)
+                ctx = await pw.chromium.launch_persistent_context(
+                    user_data_dir=str(user_data),
+                    headless=False,
+                    args=["--disable-blink-features=AutomationControlled"],
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                )
+                if ats == "workday":
+                    _sf2 = _workday_session_file(user_data, company_rec.get("tenant", ""))
+                    if _sf2.exists():
+                        try:
+                            import json as _json2
+                            _sdata2 = _json2.loads(_sf2.read_text())
+                            _cookies2 = _sdata2.get("cookies", [])
+                            if _cookies2:
+                                await ctx.add_cookies(_cookies2)
+                        except Exception:
+                            pass
+                page = await ctx.new_page()
+                _ctx_dead = False
+                print(f"  [Browser] Fresh browser ready — continuing with job {i}", flush=True)
+
             title   = job["title"]
             job_url = job["url"]
             job_ats = job.get("ats", ats)
@@ -7703,7 +7809,9 @@ async def apply_to_company(
                     try:
                         page = await ctx.new_page()
                     except Exception:
-                        pass
+                        # Entire browser process crashed — will relaunch at next iteration
+                        print(f"  [Browser] Context dead — will relaunch for next job", flush=True)
+                        _ctx_dead = True
 
                 if i < len(jobs):
                     await asyncio.sleep(BETWEEN_JOBS)

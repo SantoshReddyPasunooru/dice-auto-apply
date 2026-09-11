@@ -26,6 +26,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from playwright.async_api import (
@@ -75,6 +76,56 @@ OLLAMA_TEXT_MODEL = "gemma2:2b"
 OLLAMA_VISION_MODEL: str | None = None   # auto-detected at startup
 
 PROFILES_JSON = Path(__file__).parent / "profiles.json"
+
+
+def _profile_session_dir(email: str) -> Path:
+    normalized_email = email.strip().lower()
+    for candidate in sorted(Path.home().iterdir()):
+        email_file = candidate / ".profile_email"
+        if (candidate.is_dir() and candidate.name.startswith(".dice-")
+                and email_file.exists()
+                and email_file.read_text().strip().lower() == normalized_email):
+            return candidate
+
+    safe_email = re.sub(r"[^a-z0-9]", "_", normalized_email)
+    session_dir = Path.home() / f".dice-playwright-profile-{safe_email}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / ".profile_email").write_text(normalized_email)
+    return session_dir
+
+
+def _is_authenticated_dice_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    path = parsed.path.lower().rstrip("/")
+    if host != "dice.com" and not host.endswith(".dice.com"):
+        return False
+    if any(part in path for part in ("/login", "/register", "/signin", "/auth", "/sso/")):
+        return False
+    return path.startswith((
+        "/dashboard",
+        "/jobs",
+        "/profile",
+        "/job-detail",
+        "/job-applications",
+    ))
+
+
+async def _wait_for_dice_login(page: Page, timeout_seconds: int = 600) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        if page.is_closed():
+            raise RuntimeError("Dice login browser was closed before setup completed")
+        if _is_authenticated_dice_url(page.url):
+            return
+        await asyncio.sleep(1)
+    raise RuntimeError("Timed out waiting for Dice login")
+
+
+def _mark_dice_session_ready(session_dir: Path) -> None:
+    (session_dir / ".dice_session_ready").write_text(
+        datetime.now().isoformat(timespec="seconds")
+    )
 
 PROFILE_CONTEXT = (
     "Software engineer with 8+ years experience, specializing in Generative AI, "
@@ -442,21 +493,19 @@ async def launch_session(pw, login_only: bool = False):
     await page.goto("https://www.dice.com/dashboard", wait_until="domcontentloaded")
     await asyncio.sleep(2)
 
-    # Treat any non-Dice URL (Google OAuth, Cognito, etc.) as needing login
-    needs_login = "dice.com" not in page.url
+    needs_login = not _is_authenticated_dice_url(page.url)
     if needs_login:
+        (SESSION_DIR / ".dice_session_ready").unlink(missing_ok=True)
         print("\n>>> Log in to Dice.com in the browser window.")
         print(">>> You have 10 minutes — take your time with Google/SSO login.")
-        print(">>> Script continues automatically once you land on Dice.\n")
-        # Wait for any dice.com page — handles Google OAuth redirect chains
-        await page.wait_for_url(
-            re.compile(r"dice\.com"),
-            timeout=600_000,   # 10 minutes
-        )
+        print(">>> This browser stays open until Dice setup is complete.\n")
+        await _wait_for_dice_login(page)
         await asyncio.sleep(2)
         print("Logged in. Session saved.\n")
     else:
         print("Already logged in via saved session.\n")
+
+    _mark_dice_session_ready(SESSION_DIR)
 
     return None, context, page
 
@@ -1886,17 +1935,7 @@ async def run(profile_email: str = "", query: str | None = None,
         _pd = posted_date if posted_date is not None else POSTED_DATE
         _ea = easy_apply  if easy_apply  is not None else EASY_APPLY
 
-        profiles_dir = Path.home()
-        existing = sorted(
-            p for p in profiles_dir.iterdir()
-            if p.is_dir() and p.name.startswith(".dice-")
-        )
-        session_dir = next(
-            (p for p in existing
-             if (p / ".profile_email").exists()
-             and (p / ".profile_email").read_text().strip().lower() == profile_email.lower()),
-            existing[0] if existing else Path.home() / ".dice-playwright-profile"
-        )
+        session_dir = _profile_session_dir(profile_email)
 
         url = f"https://www.dice.com/jobs?q={quote_plus(_q)}&pageSize=20"
         if _ea:
@@ -2015,11 +2054,11 @@ async def run(profile_email: str = "", query: str | None = None,
                 pass
 
 
-async def login_only():
+async def login_only(profile_email: str = ""):
     """
     Login-only mode (python3 main.py --login).
-    Opens the browser and keeps it open until you press Enter.
-    Lets you log in, switch accounts, or verify the session — at your own pace.
+    Opens the browser and keeps it open until Dice authentication completes.
+    Lets you log in or verify the saved session at your own pace.
     """
     print("╔══════════════════════════════════════════════════╗")
     print("║       Dice.com — Login & Save Session            ║")
@@ -2033,32 +2072,36 @@ async def login_only():
         p.mkdir(parents=True, exist_ok=True)
         (p / ".profile_name").write_text(label)
 
-    profiles_dir = Path.home()
-    existing = sorted(p for p in profiles_dir.iterdir()
-                      if p.is_dir() and p.name.startswith(".dice-"))
-
-    print("── Select or create a Dice profile ───────────────")
-    if existing:
-        for i, p in enumerate(existing, 1):
-            print(f"  {i}. {_profile_label(p)}")
-        print(f"  {len(existing)+1}. Create new profile")
-        choice = input("Select [1]: ").strip() or "1"
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(existing):
-                session_dir = existing[idx]
-            else:
-                display_name = input("  Profile name: ").strip() or "New Account"
-                slug = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-")
-                session_dir = Path.home() / f".dice-{slug}"
-                _save_profile_label(session_dir, display_name)
-        except ValueError:
-            session_dir = existing[0]
+    if profile_email:
+        session_dir = _profile_session_dir(profile_email)
+        print(f"── Profile: {profile_email} ──")
     else:
-        display_name = input("  Profile name (e.g. My Dice Account): ").strip() or "My Dice Account"
-        slug = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-")
-        session_dir = Path.home() / f".dice-{slug}"
-        _save_profile_label(session_dir, display_name)
+        profiles_dir = Path.home()
+        existing = sorted(p for p in profiles_dir.iterdir()
+                          if p.is_dir() and p.name.startswith(".dice-"))
+
+        print("── Select or create a Dice profile ───────────────")
+        if existing:
+            for i, p in enumerate(existing, 1):
+                print(f"  {i}. {_profile_label(p)}")
+            print(f"  {len(existing)+1}. Create new profile")
+            choice = input("Select [1]: ").strip() or "1"
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(existing):
+                    session_dir = existing[idx]
+                else:
+                    display_name = input("  Profile name: ").strip() or "New Account"
+                    slug = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-")
+                    session_dir = Path.home() / f".dice-{slug}"
+                    _save_profile_label(session_dir, display_name)
+            except ValueError:
+                session_dir = existing[0]
+        else:
+            display_name = input("  Profile name (e.g. My Dice Account): ").strip() or "My Dice Account"
+            slug = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-")
+            session_dir = Path.home() / f".dice-{slug}"
+            _save_profile_label(session_dir, display_name)
 
     print(f"\n  → Profile: {_profile_label(session_dir)}\n")
 
@@ -2080,28 +2123,15 @@ async def login_only():
         await page.goto("https://www.dice.com/dashboard", wait_until="domcontentloaded")
         await asyncio.sleep(2)
 
-        if "dice.com" not in page.url:
+        if not _is_authenticated_dice_url(page.url):
+            (session_dir / ".dice_session_ready").unlink(missing_ok=True)
             print(">>> Browser is open — log in to Dice.com now.")
+            print(">>> It will stay open and continue automatically after login.")
+            await _wait_for_dice_login(page)
         else:
-            print(">>> Browser is open — you appear to be logged in.")
-            print(">>> To switch accounts: log out in the browser, then log in again.")
+            print(">>> You are already logged in to Dice.com.")
 
-        print(">>> Take as long as you need.")
-        print("\n>>> Press Enter here when you are fully logged in and ready ...")
-
-        # Wait for Enter — browser stays open the whole time
-        await asyncio.get_event_loop().run_in_executor(None, input)
-
-        # Verify we're on Dice before saving
-        if "dice.com" not in page.url:
-            print("\n⚠️  Not on Dice.com yet. Waiting up to 5 more minutes...")
-            try:
-                await page.wait_for_url(re.compile(r"dice\.com"), timeout=300_000)
-            except Exception:
-                print("❌  Timed out — session not saved. Please try again.")
-                await context.close()
-                return
-
+        _mark_dice_session_ready(session_dir)
         print(f"\n✅  Session saved for '{_profile_label(session_dir)}'.")
         print("    Run  python3 main.py  to start applying.\n")
         try:
@@ -2121,7 +2151,7 @@ if __name__ == "__main__":
     args, _ = ap.parse_known_args()
 
     if args.login:
-        asyncio.run(login_only())
+        asyncio.run(login_only(args.profile))
     elif args.profile:
         asyncio.run(run(profile_email=args.profile,
                         query=args.query or None,

@@ -199,6 +199,7 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
           <span class="conn-label">Dice Session</span>
           <div style="display:flex;gap:8px;align-items:center">
             <span id="conn-dice" class="badge disconnected"><span class="dot"></span>Checking</span>
+            <button class="btn btn-ghost btn-sm" onclick="connectDice()">Connect</button>
           </div>
         </div>
         <div class="conn-row">
@@ -361,6 +362,7 @@ legend{padding:0 8px;font-size:12px;font-weight:700;text-transform:uppercase;let
       </div>
     </div>
     <div class="ctrl-row">
+      <button class="btn btn-ghost" onclick="connectDice()">🔐 Connect Dice</button>
       <button id="btn-dice_apply" class="btn btn-primary" onclick="startDice()">▶ Start</button>
       <button id="stop-dice_apply" class="btn btn-danger" onclick="stopFeature('dice_apply')" style="display:none">■ Stop</button>
     </div>
@@ -859,6 +861,11 @@ function startDice() {
     easy_apply: document.getElementById('dice-easy').value === 'true',
   };
   startFeature('dice_apply', extra);
+}
+
+function connectDice() {
+  switchTab('dice_apply');
+  startFeature('dice_apply', {login: true});
 }
 
 function toggleAllCompanies(check) {

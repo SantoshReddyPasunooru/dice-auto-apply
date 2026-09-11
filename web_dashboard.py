@@ -159,11 +159,9 @@ def api_status():
     token = _profile_dir(PROFILE_EMAIL) / "gmail_token.json"
     gmail = "connected" if token.exists() else "disconnected"
 
-    # Dice session (shared playwright profile dir)
-    dice_dir = Path.home() / ".dice-playwright-profile"
-    dice_connected = dice_dir.exists() and any(
-        f.suffix in (".json", ".sqlite") for f in dice_dir.rglob("*") if f.is_file()
-    )
+    # Dice session is marked ready only after an authenticated Dice page is reached.
+    dice_dir = _dice_session_dir(PROFILE_EMAIL)
+    dice_connected = (dice_dir / ".dice_session_ready").exists()
     dice = "connected" if dice_connected else "disconnected"
 
     # Ollama
@@ -433,13 +431,16 @@ def api_run(feature):
         if body.get("job_types"):
             cmd += ["--job-types"] + body["job_types"].split()
     elif feature == "dice_apply":
-        cmd = [sys.executable, "main.py", "--profile", PROFILE_EMAIL]
-        if body.get("query"):
-            cmd += ["--query", body["query"]]
-        if body.get("date"):
-            cmd += ["--date", body["date"]]
-        if body.get("easy_apply") is not None:
-            cmd += ["--easy-apply", str(body["easy_apply"]).lower()]
+        if body.get("login"):
+            cmd = [sys.executable, "main.py", "--login", "--profile", PROFILE_EMAIL]
+        else:
+            cmd = [sys.executable, "main.py", "--profile", PROFILE_EMAIL]
+            if body.get("query"):
+                cmd += ["--query", body["query"]]
+            if body.get("date"):
+                cmd += ["--date", body["date"]]
+            if body.get("easy_apply") is not None:
+                cmd += ["--easy-apply", str(body["easy_apply"]).lower()]
     elif feature == "companies_apply":
         companies = body.get("companies", [])
         if not companies:
@@ -476,10 +477,12 @@ def api_run(feature):
         return jsonify({"ok": False, "error": "unknown feature"})
 
     try:
+        proc_env = os.environ.copy()
+        proc_env["PYTHONUNBUFFERED"] = "1"
         proc = subprocess.Popen(
             cmd, cwd=str(_HERE),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, env=os.environ.copy()
+            text=True, bufsize=1, env=proc_env
         )
         with _lock:
             PROCESSES[feature] = proc

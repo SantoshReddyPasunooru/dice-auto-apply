@@ -6023,63 +6023,55 @@ async def _wd_voluntary(page: Page, profile: dict = None) -> None:
         await btn.click(force=True)
         await asyncio.sleep(1.2)   # give Workday time to render the dropdown
 
-        # JS probe: find ALL newly visible options regardless of element type/selector
-        _visible_opts = await page.evaluate("""
-            () => {
-                const sels = [
-                    '[data-automation-id="promptOption"]',
-                    '[role="option"]',
-                    'li[tabindex]',
-                    '[role="listbox"] li',
-                    'ul[role="listbox"] li',
-                    'div[role="option"]',
-                    '[data-automation-id="dropdownOption"]',
-                ];
-                for (const sel of sels) {
-                    const els = [...document.querySelectorAll(sel)].filter(el => {
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    });
-                    if (els.length > 0) {
-                        return {sel, opts: els.map((el, i) => ({text: el.textContent.trim(), idx: i}))};
-                    }
-                }
-                return null;
-            }
-        """)
-        print(f"          [VD] Strat1 {aid} dropdown probe: {_visible_opts}", flush=True)
+        # Use Playwright locators (pierce shadow DOM unlike querySelectorAll)
+        _option_sels = [
+            "[data-automation-id='promptOption']",
+            "[role='option']",
+            "li[tabindex]",
+            "[role='listbox'] li",
+            "div[role='option']",
+            "[data-automation-id='dropdownOption']",
+        ]
+        _pw_opts = []
+        _used_opt_sel = None
+        for _opt_sel in _option_sels:
+            _loc = page.locator(_opt_sel)
+            _cnt = await _loc.count()
+            if _cnt > 0:
+                _pw_opts = await _loc.all()
+                _used_opt_sel = _opt_sel
+                break
+        print(f"          [VD] Strat1 {aid} dropdown options ({_used_opt_sel}): {_cnt if _pw_opts else 0}", flush=True)
 
         picked = False
-        if _visible_opts:
-            _found_sel = _visible_opts["sel"]
-            _found_opts = _visible_opts["opts"]
-            first_real_idx = None
-            for _o in _found_opts:
-                t = _o["text"].lower()
+        first_real = None
+        for _opt in _pw_opts:
+            try:
+                t = (await _opt.inner_text()).strip().lower()
                 if not t or t in ("select one", "-- select --"):
                     continue
                 if skip_kw and skip_kw in t:
                     continue
+                if first_real is None:
+                    first_real = _opt
                 # Exact-word match to avoid "male" hitting inside "female"
                 exact = any(
                     t == w or t.startswith(w + " ") or t.endswith(" " + w) or f" {w} " in f" {t} "
                     for w in kws
                 )
                 if exact or any(w in t for w in kws):
-                    try:
-                        await page.locator(_found_sel).nth(_o["idx"]).click(force=True)
-                        picked = True
-                        break
-                    except Exception:
-                        pass
-                if first_real_idx is None:
-                    first_real_idx = _o["idx"]
-            if not picked and first_real_idx is not None:
-                try:
-                    await page.locator(_found_sel).nth(first_real_idx).click(force=True)
+                    await _opt.click(force=True)
+                    print(f"          [VD] Strat1 {aid} → '{t[:50]}'", flush=True)
                     picked = True
-                except Exception:
-                    pass
+                    break
+            except Exception:
+                pass
+        if not picked and first_real is not None:
+            try:
+                await first_real.click(force=True)
+                picked = True
+            except Exception:
+                pass
 
         if not picked:
             # Last resort: keyboard navigation — type the value and press Enter
@@ -7107,11 +7099,18 @@ async def _fill_workday(
             print(f"          [Workday] CC-305 form detected — filling disability + Name + Date", flush=True)
 
             # ── Disability checkbox/radio ─────────────────────────────────
-            # Scroll to bottom first so all elements are rendered, then use JS
-            # to find whatever element type Workday uses for the disability options.
+            # Scroll to the disability section by locating text near it, then use
+            # Playwright locators (which pierce shadow DOM, unlike querySelectorAll).
             try:
-                await apply_page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(0.8)
+                # Try to scroll to the disability question header
+                _dis_header = apply_page.locator(
+                    "text=/disability|please check/i, [data-automation-id*='disability' i]"
+                ).first
+                if await _dis_header.count() > 0:
+                    await _dis_header.scroll_into_view_if_needed()
+                else:
+                    await apply_page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(1.0)
 
                 _dis_decline_kws = (
                     "i don't wish", "i do not wish", "prefer not", "choose not",
@@ -7119,64 +7118,51 @@ async def _fill_workday(
                     "i am not", "does not apply", "decline",
                 )
 
-                # JS: find all interactive inputs (radio + checkbox) plus role-based
-                # equivalents anywhere on the page, with their label text
-                _dis_info = await apply_page.evaluate("""
-                    () => {
-                        const results = [];
-                        // Standard inputs
-                        for (const sel of ['input[type="radio"]', 'input[type="checkbox"]']) {
-                            for (const el of document.querySelectorAll(sel)) {
-                                const rid = el.id || '';
-                                const lbl = rid ? document.querySelector('label[for="' + rid + '"]') : null;
-                                const lbl2 = el.closest('label');
-                                const text = (lbl?.textContent || lbl2?.textContent || el.getAttribute('aria-label') || '').trim();
-                                results.push({type: sel, id: rid, text: text, checked: el.checked});
-                            }
-                        }
-                        // ARIA role-based (Workday custom components)
-                        for (const sel of ['[role="radio"]', '[role="checkbox"]']) {
-                            for (const el of document.querySelectorAll(sel)) {
-                                const text = (el.getAttribute('aria-label') || el.textContent || '').trim();
-                                const checked = el.getAttribute('aria-checked') === 'true';
-                                results.push({type: sel, id: el.id || '', text: text, checked: checked});
-                            }
-                        }
-                        return results;
-                    }
-                """)
-                print(f"          [Workday] CC-305 disability candidates: {_dis_info}", flush=True)
+                # Playwright locators pierce shadow DOM — try each element type in order
+                _dis_els: list = []
+                for _dis_sel in (
+                    "input[type='radio']",
+                    "[role='radio']",
+                    "input[type='checkbox']",
+                    "[role='checkbox']",
+                ):
+                    _loc = apply_page.locator(_dis_sel)
+                    _cnt = await _loc.count()
+                    if _cnt > 0:
+                        _dis_els = await _loc.all()
+                        print(f"          [Workday] CC-305 disability found {_cnt} {_dis_sel} elements", flush=True)
+                        break
 
                 _dis_picked = False
-                # First pass: look for decline/no-disability keywords
-                for _item in (_dis_info or []):
-                    _lt = (_item.get("text") or "").lower()
-                    if any(k in _lt for k in _dis_decline_kws):
-                        _sel = _item["type"]
-                        _iid = _item.get("id", "")
-                        if _iid:
-                            _el = apply_page.locator(f"#{_iid}").first
-                        else:
-                            _el = apply_page.locator(f"{_sel}").nth((_dis_info or []).index(_item))
-                        try:
+                # First pass: look for decline/no-disability keywords via label text
+                for _el in _dis_els:
+                    try:
+                        _eid = await _el.get_attribute("id") or ""
+                        _lbl = apply_page.locator(f"label[for='{_eid}']").first if _eid else None
+                        _lbl_text = (await _lbl.inner_text() if _lbl and await _lbl.count() > 0 else "").strip().lower()
+                        if not _lbl_text:
+                            # Try aria-label or parent text
+                            _lbl_text = (
+                                await _el.get_attribute("aria-label") or
+                                await _el.evaluate("el => el.closest('label')?.textContent || el.parentElement?.textContent || ''")
+                            ).strip().lower()
+                        print(f"          [Workday] CC-305 candidate: '{_lbl_text[:70]}'", flush=True)
+                        if any(k in _lbl_text for k in _dis_decline_kws):
                             await _el.scroll_into_view_if_needed()
                             await _el.click(force=True)
-                            print(f"          [Workday] CC-305 disability → '{_lt[:60]}'", flush=True)
+                            print(f"          [Workday] CC-305 disability → '{_lbl_text[:60]}'", flush=True)
                             _dis_picked = True
                             break
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
 
-                # Fallback: click last available option
-                if not _dis_picked and _dis_info:
-                    _last = _dis_info[-1]
-                    _sel  = _last["type"]
-                    _iid  = _last.get("id", "")
+                # Fallback: click last available element
+                if not _dis_picked and _dis_els:
                     try:
-                        _el = apply_page.locator(f"#{_iid}").first if _iid else apply_page.locator(_sel).last
-                        await _el.scroll_into_view_if_needed()
-                        await _el.click(force=True)
-                        print(f"          [Workday] CC-305 disability → fallback last ({_last.get('text','')[:40]})", flush=True)
+                        _last_el = _dis_els[-1]
+                        await _last_el.scroll_into_view_if_needed()
+                        await _last_el.click(force=True)
+                        print(f"          [Workday] CC-305 disability → fallback last element", flush=True)
                         _dis_picked = True
                     except Exception:
                         pass
@@ -7186,6 +7172,8 @@ async def _fill_workday(
                     # Scroll back to top so name/date fields are visible
                     await apply_page.evaluate("window.scrollTo(0, 0)")
                     await asyncio.sleep(0.3)
+                else:
+                    print(f"          [Workday] CC-305 disability: no element selected (found {len(_dis_els)})", flush=True)
             except Exception as _de:
                 print(f"          [Workday] CC-305 disability error: {_de}", flush=True)
 

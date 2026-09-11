@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, redirect, render_template, request
+from werkzeug.utils import secure_filename
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE           = Path(__file__).parent
@@ -32,8 +33,11 @@ PROFILES_JSON   = _HERE / "profiles.json"
 RESUMES_JSON    = _HERE / "resumes.json"
 APPLIED_CSV     = _HERE / "applied_jobs.csv"
 EXT_CSV         = _HERE / "external_applied_jobs.csv"
+HANDSHAKE_CSV   = _HERE / "handshake_applied_jobs.csv"
+LINKEDIN_APPLIED_CSV = _HERE / "linkedin_applied_jobs.csv"
 RECRUITERS_CSV  = _HERE / "recruiters.csv"
 COMPANIES_JSON  = _HERE / "applicable_companies.json"
+COMPANY_DB_JSON = _HERE / "company_careers_db.json"
 LI_CONFIG_JSON  = _HERE / "linkedin_config.json"
 
 app = Flask(__name__)
@@ -43,7 +47,7 @@ PROFILE_EMAIL:  str  = ""
 PROFILE_NAME:   str  = ""
 SETUP_REQUIRED: bool = False
 
-FEATURES = ["gmail_monitor", "linkedin_outreach", "dice_apply", "companies_apply"]
+FEATURES = ["gmail_monitor", "linkedin_outreach", "linkedin_apply", "dice_apply", "handshake_apply", "companies_apply"]
 
 PROCESSES:       dict[str, subprocess.Popen] = {}
 LOG_BUFFERS:     dict[str, deque]            = {f: deque(maxlen=500) for f in FEATURES}
@@ -292,6 +296,32 @@ def api_jobs():
     return jsonify(rows[:limit])
 
 
+@app.route("/api/handshake-jobs")
+def api_handshake_jobs():
+    rows = []
+    if HANDSHAKE_CSV.exists():
+        try:
+            with HANDSHAKE_CSV.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        except Exception:
+            rows = []
+    limit = request.args.get("limit", 200, type=int)
+    return jsonify(list(reversed(rows[-limit:])))
+
+
+@app.route("/api/linkedin-applied-jobs")
+def api_linkedin_applied_jobs():
+    rows = []
+    if LINKEDIN_APPLIED_CSV.exists():
+        try:
+            with LINKEDIN_APPLIED_CSV.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        except Exception:
+            rows = []
+    limit = request.args.get("limit", 200, type=int)
+    return jsonify(list(reversed(rows[-limit:])))
+
+
 @app.route("/api/stats")
 def api_stats():
     stats = dict(dice_applied=0, dice_errors=0,
@@ -415,6 +445,28 @@ def api_stream(feature):
 @app.route("/api/run/<feature>", methods=["POST"])
 def api_run(feature):
     body = request.json or {}
+    if feature == "linkedin_outreach":
+        all_config = json.loads(LI_CONFIG_JSON.read_text()) if LI_CONFIG_JSON.exists() else {}
+        config = all_config.setdefault(PROFILE_EMAIL, {})
+        if body.get("keywords"):
+            config["search_keywords"] = body["keywords"].split()
+        for key in ("job_types", "target_roles", "experience_levels", "locations"):
+            if body.get(key):
+                config[key] = body[key]
+        if body.get("date") is not None:
+            config["date_filter"] = body["date"]
+        config.setdefault("sender_email", PROFILE_EMAIL)
+        config["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        LI_CONFIG_JSON.write_text(json.dumps(all_config, indent=2))
+    if feature in {"dice_apply", "companies_apply"} and body.get("experience_levels"):
+        profiles = json.loads(PROFILES_JSON.read_text()) if PROFILES_JSON.exists() else {}
+        profile = profiles.setdefault(PROFILE_EMAIL, {})
+        profile["experience_levels"] = body["experience_levels"]
+        if body.get("max_required_years") is not None:
+            profile["max_required_years"] = max(
+                0, min(4, int(body["max_required_years"]))
+            )
+        PROFILES_JSON.write_text(json.dumps(profiles, indent=2))
     with _lock:
         p = PROCESSES.get(feature)
         if p and p.poll() is None:
@@ -423,13 +475,37 @@ def api_run(feature):
     if feature == "gmail_monitor":
         cmd = [sys.executable, "gmail_monitor.py", "--profile", PROFILE_EMAIL]
     elif feature == "linkedin_outreach":
-        cmd = [sys.executable, "linkedin_outreach.py", "--profile", PROFILE_EMAIL]
+        runner = "linkedin_apply.py" if body.get("auto_apply") else "linkedin_outreach.py"
+        cmd = [sys.executable, runner, "--profile", PROFILE_EMAIL]
+        if body.get("login"):
+            cmd += ["--login"]
+            runner = "linkedin_apply.py"
+            cmd = [sys.executable, runner, "--profile", PROFILE_EMAIL, "--login"]
+            body = {}
         if body.get("keywords"):
-            cmd += ["--keywords"] + body["keywords"].split()
-        if body.get("date"):
+            cmd += ["--keywords", body["keywords"]] if body.get("auto_apply") else ["--keywords"] + body["keywords"].split()
+        if body.get("date") and not body.get("auto_apply"):
             cmd += ["--date", body["date"]]
-        if body.get("job_types"):
-            cmd += ["--job-types"] + body["job_types"].split()
+        if body.get("job_types") and not body.get("auto_apply"):
+            job_types = body["job_types"] if isinstance(body["job_types"], list) else body["job_types"].split()
+            cmd += ["--job-types"] + job_types
+        if body.get("target_roles") and not body.get("auto_apply"):
+            cmd += ["--target-roles"] + body["target_roles"]
+        if body.get("experience_levels"):
+            levels = body["experience_levels"]
+            cmd += ["--experience-levels", ",".join(levels) if isinstance(levels, list) else str(levels)]
+        if body.get("locations") and not body.get("auto_apply"):
+            cmd += ["--locations"] + body["locations"]
+    elif feature == "linkedin_apply":
+        cmd = [sys.executable, "linkedin_apply.py", "--profile", PROFILE_EMAIL]
+        if body.get("login"):
+            cmd += ["--login"]
+        if body.get("keywords"):
+            cmd += ["--keywords", body["keywords"]]
+        if body.get("experience_levels"):
+            cmd += ["--experience-levels", ",".join(body["experience_levels"])]
+        if body.get("max_required_years") is not None:
+            cmd += ["--max-required-years", str(body["max_required_years"])]
     elif feature == "dice_apply":
         if body.get("login"):
             cmd = [sys.executable, "main.py", "--login", "--profile", PROFILE_EMAIL]
@@ -441,38 +517,68 @@ def api_run(feature):
                 cmd += ["--date", body["date"]]
             if body.get("easy_apply") is not None:
                 cmd += ["--easy-apply", str(body["easy_apply"]).lower()]
+            if body.get("experience_levels"):
+                cmd += ["--experience-levels", ",".join(body["experience_levels"])]
+            if body.get("max_required_years") is not None:
+                cmd += ["--max-required-years", str(body["max_required_years"])]
+    elif feature == "handshake_apply":
+        cmd = [sys.executable, "handshake_apply.py", "--profile", PROFILE_EMAIL]
+        if body.get("login"):
+            cmd += ["--login"]
+        if body.get("keywords"):
+            cmd += ["--keywords", body["keywords"]]
+        if body.get("experience_levels"):
+            cmd += ["--experience-levels", ",".join(body["experience_levels"])]
+        if body.get("max_required_years") is not None:
+            cmd += ["--max-required-years", str(body["max_required_years"])]
     elif feature == "companies_apply":
         companies = body.get("companies", [])
         if not companies:
             return jsonify({"ok": False, "error": "select at least one company"})
 
-        # Build shared filter args
-        filter_args: list[str] = ["--profile", PROFILE_EMAIL]
-        keywords   = body.get("keywords", "").strip()
-        location   = body.get("location", "").strip()
-        date       = body.get("date", "").strip()
-        experience = body.get("experience", "").strip()
-        if keywords:
-            filter_args += ["--keywords", keywords]
+        if body.get("login"):
+            if len(companies) != 1:
+                return jsonify({"ok": False, "error": "select one Workday company to connect"})
+            database = json.loads(COMPANY_DB_JSON.read_text()) if COMPANY_DB_JSON.exists() else {}
+            record = next((item for item in database.values()
+                           if isinstance(item, dict) and item.get("name") == companies[0]), {})
+            if record.get("ats") != "workday":
+                return jsonify({"ok": False, "error": "this company does not require a Workday login"})
+            cmd = [sys.executable, "company_apply.py", "--company", companies[0],
+                   "--profile", PROFILE_EMAIL, "--setup-workday"]
         else:
-            filter_args += ["--all-roles"]
-        if location:
-            filter_args += ["--location", location]
-        if date:
-            filter_args += ["--posted-days", date]
-        if experience:
-            filter_args += ["--experience", experience]
 
-        # For a single company use a plain list; for multiple, chain via bash -c
-        if len(companies) == 1:
-            cmd = [sys.executable, "company_apply.py",
-                   "--company", companies[0]] + filter_args
-        else:
-            parts = []
-            for c in companies:
-                args = [sys.executable, "company_apply.py", "--company", c] + filter_args
-                parts.append(" ".join(shlex.quote(a) for a in args))
-            cmd = ["bash", "-c", " && ".join(parts)]
+            # Build shared filter args
+            filter_args: list[str] = ["--profile", PROFILE_EMAIL]
+            keywords   = body.get("keywords", "").strip()
+            location   = body.get("location", "").strip()
+            date       = body.get("date", "").strip()
+            experience_levels = body.get("experience_levels", [])
+            experience = ",".join(experience_levels) if experience_levels else body.get("experience", "").strip()
+            max_required_years = body.get("max_required_years")
+            if keywords:
+                filter_args += ["--keywords", keywords]
+            else:
+                filter_args += ["--all-roles"]
+            if location:
+                filter_args += ["--location", location]
+            if date:
+                filter_args += ["--posted-days", date]
+            if experience:
+                filter_args += ["--experience", experience]
+            if max_required_years is not None:
+                filter_args += ["--max-required-years", str(max_required_years)]
+
+            # For a single company use a plain list; for multiple, chain via bash -c
+            if len(companies) == 1:
+                cmd = [sys.executable, "company_apply.py",
+                       "--company", companies[0]] + filter_args
+            else:
+                parts = []
+                for c in companies:
+                    args = [sys.executable, "company_apply.py", "--company", c] + filter_args
+                    parts.append(" ".join(shlex.quote(a) for a in args))
+                cmd = ["bash", "-c", " && ".join(parts)]
     else:
         return jsonify({"ok": False, "error": "unknown feature"})
 
@@ -514,7 +620,10 @@ def api_linkedin_config():
     cfg = all_cfg.get(PROFILE_EMAIL, all_cfg if isinstance(all_cfg, dict) and "search_keywords" in all_cfg else {})
     return jsonify({
         "keywords":  " ".join(cfg.get("search_keywords", ["gen ai"])),
-        "job_types": " ".join(cfg.get("job_types", ["OPT", "W2"])),
+        "job_types": cfg.get("job_types", ["OPT", "W2"]),
+        "target_roles": ", ".join(cfg.get("target_roles", [])),
+        "experience_levels": cfg.get("experience_levels", ["junior"]),
+        "locations": cfg.get("locations", []),
         "date":      cfg.get("date_filter", "past-week"),
     })
 
@@ -524,6 +633,71 @@ def api_companies():
     if COMPANIES_JSON.exists():
         return jsonify(json.loads(COMPANIES_JSON.read_text()))
     return jsonify([])
+
+
+@app.route("/api/company-groups")
+def api_company_groups():
+    available = json.loads(COMPANIES_JSON.read_text()) if COMPANIES_JSON.exists() else []
+    database = json.loads(COMPANY_DB_JSON.read_text()) if COMPANY_DB_JSON.exists() else {}
+    supported = [item.get("name") for item in database.values()
+                 if isinstance(item, dict) and item.get("name") in available
+                 and item.get("ats") != "generic"]
+    groups = {
+        "FAANG": ["Meta", "Amazon", "Apple", "Netflix", "Google"],
+        "MANGOS": ["Meta", "Anthropic", "NVIDIA", "Google", "OpenAI", "SpaceX"],
+        "All Configured": available,
+    }
+    return jsonify({name: {"members": companies,
+                           "available": [company for company in companies if company in available],
+                           "auto_apply": [company for company in companies if company in supported]}
+                    for name, companies in groups.items()})
+
+
+@app.route("/api/resumes")
+def api_resumes():
+    data = json.loads(RESUMES_JSON.read_text()) if RESUMES_JSON.exists() else {}
+    entry = data.get(PROFILE_EMAIL, {})
+    folder = Path(entry.get("resume_folder", "")).expanduser()
+    files = (sorted(p.name for p in folder.iterdir()
+                    if p.suffix.lower() in {".pdf", ".docx"})
+             if folder.is_dir() else [])
+    return jsonify({"files": files, "default": Path(entry.get("default_resume", "")).name})
+
+
+@app.route("/api/resumes/upload", methods=["POST"])
+def api_resumes_upload():
+    uploads = request.files.getlist("resumes")
+    folder = _HERE / "resumes" / _safe(PROFILE_EMAIL)
+    folder.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for upload in uploads:
+        filename = secure_filename(upload.filename or "")
+        if Path(filename).suffix.lower() not in {".pdf", ".docx"}:
+            continue
+        upload.save(folder / filename)
+        saved.append(filename)
+    if not saved:
+        return jsonify({"ok": False, "error": "Select PDF or DOCX resumes"})
+    data = json.loads(RESUMES_JSON.read_text()) if RESUMES_JSON.exists() else {}
+    entry = data.setdefault(PROFILE_EMAIL, {})
+    entry["resume_folder"] = str(folder)
+    if request.form.get("set_default") == "true" or not entry.get("default_resume"):
+        entry["default_resume"] = str(folder / saved[0])
+    RESUMES_JSON.write_text(json.dumps(data, indent=2))
+    return jsonify({"ok": True, "files": saved})
+
+
+@app.route("/api/resumes/default", methods=["POST"])
+def api_resume_default():
+    filename = secure_filename((request.json or {}).get("filename", ""))
+    data = json.loads(RESUMES_JSON.read_text()) if RESUMES_JSON.exists() else {}
+    entry = data.setdefault(PROFILE_EMAIL, {})
+    path = Path(entry.get("resume_folder", "")).expanduser() / filename
+    if not path.is_file():
+        return jsonify({"ok": False, "error": "Resume not found"})
+    entry["default_resume"] = str(path)
+    RESUMES_JSON.write_text(json.dumps(data, indent=2))
+    return jsonify({"ok": True})
 
 
 @app.route("/api/profiles")
@@ -563,7 +737,8 @@ def api_setup_profile():
     data = request.json or {}
     profiles = json.loads(PROFILES_JSON.read_text()) if PROFILES_JSON.exists() else {}
     resumes  = json.loads(RESUMES_JSON.read_text())  if RESUMES_JSON.exists()  else {}
-    profiles[PROFILE_EMAIL] = {
+    profile = profiles.get(PROFILE_EMAIL, {})
+    profile.update({
         "name":               data.get("name", ""),
         "phone":              data.get("phone", ""),
         "location":           data.get("location", ""),
@@ -576,7 +751,8 @@ def api_setup_profile():
         "github_url":         data.get("github_url", ""),
         "portfolio_url":      data.get("portfolio_url", ""),
         "summary":            data.get("summary", ""),
-    }
+    })
+    profiles[PROFILE_EMAIL] = profile
     resumes.setdefault(PROFILE_EMAIL, {})
     PROFILES_JSON.write_text(json.dumps(profiles, indent=2))
     RESUMES_JSON.write_text(json.dumps(resumes, indent=2))

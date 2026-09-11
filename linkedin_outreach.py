@@ -46,7 +46,7 @@ def _profile_session_dir(sender_email: str) -> Path:
 
 # ── Config setup ──────────────────────────────────────────────────────────────
 
-_JOB_TYPE_OPTIONS = ["OPT", "W2", "C2C", "1099", "Corp-to-Corp", "Contract", "Full-time"]
+_JOB_TYPE_OPTIONS = ["OPT", "STEM OPT", "W2", "C2C", "1099", "Corp-to-Corp", "Contract", "Full-time", "Part-time", "Internship"]
 _DATE_OPTIONS     = {
     "1": ("past-week",  "Past week"),
     "2": ("past-month", "Past month"),
@@ -61,19 +61,21 @@ _EXPERIENCE_OPTIONS = {
 }
 # Keywords used to (a) add to the LinkedIn search query and (b) filter post text
 _EXPERIENCE_SEARCH_TERMS: dict[str, list[str]] = {
+    "intern":  ["internship", "intern", "co-op"],
     "junior":  ["junior", "entry level", "entry-level", "new grad"],
     "mid":     ["mid level", "mid-level", "associate"],
     "senior":  ["senior", "sr."],
     "lead":    ["lead", "principal", "staff engineer"],
 }
 _EXPERIENCE_POST_KEYWORDS: dict[str, list[str]] = {
+    "intern":  ["internship", "intern", "co-op", "co op"],
     "junior":  ["junior", "entry level", "entry-level", "new grad",
                 "0-2 year", "1-2 year", "1-3 year", "fresher"],
     "mid":     ["mid level", "mid-level", "associate", "2-4 year",
                 "2-5 year", "3-5 year", "3+ year"],
-    "senior":  ["senior", "sr.", " sr ", "5+ year", "6+ year",
+    "senior":  ["senior", "sr.", " sr ", "4+ year", "4-6 year", "5+ year", "6+ year",
                 "7+ year", "5-8 year", "5 year", "experienced"],
-    "lead":    ["lead", "principal", "staff engineer", "tech lead",
+    "lead":    ["lead", "principal", "staff", "staff engineer", "tech lead",
                 "architect", "10+ year", "8+ year"],
 }
 
@@ -627,6 +629,16 @@ _JOB_KEYWORDS = [
     "w2", "opt", "c2c", "corp-to-corp", "1099",
 ]
 
+_ROLE_KEYWORDS = [
+    "computer science", "information systems", "management information systems", "mis",
+    "software", "developer", "programmer", "full stack", "backend", "frontend", "web",
+    "java", "spring", "python", "cloud", "devops", "data", "analytics", "business analyst",
+    "systems analyst", "systems engineer", "information technology", "it analyst", "cyber",
+    "security analyst", "network engineer", "qa", "quality assurance", "test engineer",
+    "database", "machine learning", "artificial intelligence", "automation", "technology",
+    "technical support", "implementation analyst", "product analyst",
+]
+
 _SKIP_KEYWORDS = [
     "congratulations", "congrats", "happy to share", "excited to announce",
     "i got a new job", "i joined", "i started", "i'm thrilled",
@@ -643,6 +655,10 @@ def is_job_post(text: str) -> bool:
     if any(kw in lower for kw in _SKIP_KEYWORDS):
         return False
     return any(kw in lower for kw in _JOB_KEYWORDS)
+
+
+def is_relevant_role(text: str) -> bool:
+    return any(keyword in text.lower() for keyword in _ROLE_KEYWORDS)
 
 
 def is_experience_match(text: str, experience_levels: list[str]) -> bool:
@@ -668,6 +684,29 @@ def is_experience_match(text: str, experience_levels: list[str]) -> bool:
         any(kw in lower for kw in _EXPERIENCE_POST_KEYWORDS.get(level, []))
         for level in experience_levels
     )
+
+
+_US_STATE_NAMES = {
+    "AL":"alabama","AK":"alaska","AZ":"arizona","AR":"arkansas","CA":"california",
+    "CO":"colorado","CT":"connecticut","DE":"delaware","FL":"florida","GA":"georgia",
+    "HI":"hawaii","ID":"idaho","IL":"illinois","IN":"indiana","IA":"iowa","KS":"kansas",
+    "KY":"kentucky","LA":"louisiana","ME":"maine","MD":"maryland","MA":"massachusetts",
+    "MI":"michigan","MN":"minnesota","MS":"mississippi","MO":"missouri","MT":"montana",
+    "NE":"nebraska","NV":"nevada","NH":"new hampshire","NJ":"new jersey","NM":"new mexico",
+    "NY":"new york","NC":"north carolina","ND":"north dakota","OH":"ohio","OK":"oklahoma",
+    "OR":"oregon","PA":"pennsylvania","RI":"rhode island","SC":"south carolina",
+    "SD":"south dakota","TN":"tennessee","TX":"texas","UT":"utah","VT":"vermont",
+    "VA":"virginia","WA":"washington","WV":"west virginia","WI":"wisconsin","WY":"wyoming",
+}
+
+
+def is_location_match(text: str, locations: list[str]) -> bool:
+    if not locations or "ALL" in locations:
+        return True
+    lower = text.lower()
+    mentioned = {code for code, name in _US_STATE_NAMES.items()
+                 if name in lower or re.search(rf"\b{code.lower()}\b", lower)}
+    return not mentioned or bool(mentioned.intersection({location.upper() for location in locations}))
 
 
 def extract_email(text: str) -> str | None:
@@ -899,6 +938,7 @@ async def run_outreach(config: dict, tag: str = ""):
     p(f"Keywords  : {' '.join(config['search_keywords'])}")
     p(f"Types     : {' '.join(config['job_types'])}")
     p(f"Experience: {exp_display}")
+    p(f"Locations : {', '.join(config.get('locations', ['ALL']))}")
     p(f"Limit     : {config['max_posts']} posts / {config['max_emails']} emails")
 
     async with async_playwright() as pw:
@@ -940,8 +980,16 @@ async def run_outreach(config: dict, tag: str = ""):
                 if not is_job_post(text):
                     continue
 
+                if not is_relevant_role(text):
+                    p(f"[skip] Not a CS/MIS-related role — post {posts_seen}")
+                    continue
+
                 if not is_experience_match(text, config.get("experience_levels", ["any"])):
                     p(f"[skip] Experience level mismatch — post {posts_seen}")
+                    continue
+
+                if not is_location_match(text, config.get("locations", [])):
+                    p(f"[skip] Location mismatch — post {posts_seen}")
                     continue
 
                 email = extract_email(text)
@@ -1249,4 +1297,29 @@ if __name__ == "__main__":
                 jts.append(a.upper())
             if jts:
                 config["job_types"] = jts
+        if "--target-roles" in sys.argv:
+            idx = sys.argv.index("--target-roles")
+            values = []
+            for arg in sys.argv[idx + 1:]:
+                if arg.startswith("--"): break
+                values.append(arg)
+            if values:
+                config["target_roles"] = values
+                config["search_keywords"] = list(dict.fromkeys(config["search_keywords"] + values))
+        if "--experience-levels" in sys.argv:
+            idx = sys.argv.index("--experience-levels")
+            values = []
+            for arg in sys.argv[idx + 1:]:
+                if arg.startswith("--"): break
+                values.append(arg)
+            if values:
+                config["experience_levels"] = values
+        if "--locations" in sys.argv:
+            idx = sys.argv.index("--locations")
+            values = []
+            for arg in sys.argv[idx + 1:]:
+                if arg.startswith("--"): break
+                values.append(arg)
+            if values:
+                config["locations"] = values
         asyncio.run(run_outreach(config))

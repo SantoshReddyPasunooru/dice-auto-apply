@@ -27,6 +27,13 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
+try:
+    from apply_logger import log as _log
+except ImportError:
+    class _NullLog:
+        def __getattr__(self, _): return lambda *a, **k: None
+    _log = _NullLog()
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _HERE           = Path(__file__).parent
 PROFILES_JSON   = _HERE / "profiles.json"
@@ -81,16 +88,24 @@ def _dice_session_dir(email: str) -> Path:
 
 def _resolve_profile(arg: str) -> tuple[str, str]:
     global SETUP_REQUIRED
+    _log.fn("_resolve_profile", arg=arg)
     if not PROFILES_JSON.exists():
+        _log.null("PROFILES_JSON", reason="file does not exist — setup required")
         SETUP_REQUIRED = True
         email = arg if "@" in arg else f"{arg}@gmail.com"
         return email, arg
     profiles = json.loads(PROFILES_JSON.read_text())
+    _log.var("profiles_count", len(profiles))
     if arg in profiles:
-        return arg, profiles[arg].get("name", arg)
+        name = profiles[arg].get("name", arg)
+        _log.ok(f"Profile resolved by email: {arg} → {name}")
+        return arg, name
     for email, data in profiles.items():
         if data.get("name", "").lower().startswith(arg.lower()):
-            return email, data.get("name", email)
+            name = data.get("name", email)
+            _log.ok(f"Profile resolved by name prefix: {arg!r} → {email}  name={name}")
+            return email, name
+    _log.warn(f"Profile not found for arg={arg!r} — setup required")
     SETUP_REQUIRED = True
     email = arg if "@" in arg else f"{arg}@gmail.com"
     return email, arg
@@ -107,15 +122,20 @@ def _push_log(feature: str, line: str):
                 pass
 
 def _read_output(feature: str, proc: subprocess.Popen):
+    _log.fn("_read_output", feature=feature, pid=proc.pid)
     try:
         for raw in proc.stdout:
-            _push_log(feature, raw.rstrip("\n"))
-    except Exception:
-        pass
+            line = raw.rstrip("\n")
+            _push_log(feature, line)
+            if any(kw in line.lower() for kw in ("error", "exception", "traceback", "✗")):
+                _log.warn(f"[{feature}] subprocess error line: {line[:120]}")
+    except Exception as exc:
+        _log.err(f"_read_output stream broken for {feature}", exc=exc)
     finally:
         with _lock:
             if PROCESSES.get(feature) is proc:
                 PROCESSES.pop(feature, None)
+        _log.info(f"[{feature}] process ended  pid={proc.pid}")
         _push_log(feature, "__PROCESS_ENDED__")
 
 
@@ -445,6 +465,7 @@ def api_stream(feature):
 @app.route("/api/run/<feature>", methods=["POST"])
 def api_run(feature):
     body = request.json or {}
+    _log.fn("api_run", feature=feature, body_keys=list(body.keys()))
     if feature == "linkedin_outreach":
         all_config = json.loads(LI_CONFIG_JSON.read_text()) if LI_CONFIG_JSON.exists() else {}
         config = all_config.setdefault(PROFILE_EMAIL, {})
@@ -470,6 +491,7 @@ def api_run(feature):
     with _lock:
         p = PROCESSES.get(feature)
         if p and p.poll() is None:
+            _log.warn(f"api_run: {feature} already running  pid={p.pid}")
             return jsonify({"ok": False, "error": "already running"})
 
     if feature == "gmail_monitor":
@@ -533,7 +555,9 @@ def api_run(feature):
             cmd += ["--max-required-years", str(body["max_required_years"])]
     elif feature == "companies_apply":
         companies = body.get("companies", [])
+        _log.var("companies_selected", companies)
         if not companies:
+            _log.warn("api_run companies_apply: no companies selected")
             return jsonify({"ok": False, "error": "select at least one company"})
 
         if body.get("login"):
@@ -582,6 +606,7 @@ def api_run(feature):
     else:
         return jsonify({"ok": False, "error": "unknown feature"})
 
+    _log.var("cmd", cmd)
     try:
         proc_env = os.environ.copy()
         proc_env["PYTHONUNBUFFERED"] = "1"
@@ -594,18 +619,23 @@ def api_run(feature):
             PROCESSES[feature] = proc
             LOG_BUFFERS[feature].clear()   # fresh log for each new run
         threading.Thread(target=_read_output, args=(feature, proc), daemon=True).start()
+        _log.ok(f"Launched {feature}  pid={proc.pid}  cmd={' '.join(cmd[:4])}...")
         _push_log(feature, f"▶ Started PID {proc.pid}  [{' '.join(cmd)}]")
         return jsonify({"ok": True, "pid": proc.pid})
     except Exception as e:
+        _log.err(f"Failed to launch {feature}", exc=e)
         return jsonify({"ok": False, "error": str(e)})
 
 
 @app.route("/api/stop/<feature>", methods=["POST"])
 def api_stop(feature):
+    _log.fn("api_stop", feature=feature)
     with _lock:
         proc = PROCESSES.get(feature)
     if not proc or proc.poll() is not None:
+        _log.warn(f"api_stop: {feature} not running")
         return jsonify({"ok": False, "error": "not running"})
+    _log.info(f"Terminating {feature}  pid={proc.pid}")
     proc.terminate()
     _push_log(feature, "■ Process terminated by user")
     return jsonify({"ok": True})
@@ -631,19 +661,28 @@ def api_linkedin_config():
 def _load_applicable_names() -> list[str]:
     """Return sorted list of applicable company names from company_careers_db.json.
     Falls back to applicable_companies.json if the DB is missing."""
+    _log.fn("_load_applicable_names")
     if COMPANY_DB_JSON.exists():
         try:
             raw = json.loads(COMPANY_DB_JSON.read_text())
+            _log.var("db_entries_total", len(raw))
             names = sorted(
                 v["name"] for k, v in raw.items()
                 if isinstance(v, dict) and v.get("status", "active") == "active" and "name" in v
             )
+            _log.var("applicable_names_from_db", len(names))
             if names:
+                _log.ok(f"Loaded {len(names)} applicable companies from DB")
                 return names
-        except Exception:
-            pass
+            _log.warn("DB exists but no active companies found")
+        except Exception as exc:
+            _log.err("Failed to load company_careers_db.json", exc=exc)
     if COMPANIES_JSON.exists():
-        return json.loads(COMPANIES_JSON.read_text())
+        _log.warn("Falling back to applicable_companies.json")
+        names = json.loads(COMPANIES_JSON.read_text())
+        _log.var("fallback_names_count", len(names))
+        return names
+    _log.null("applicable_names", reason="neither DB nor fallback JSON found")
     return []
 
 
@@ -827,6 +866,10 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     PROFILE_EMAIL, PROFILE_NAME = _resolve_profile(args.profile)
+    _log.session_start(script="web_dashboard.py", profile=PROFILE_EMAIL)
+    _log.var("port", args.port)
+    _log.var("profile_name", PROFILE_NAME)
+    _log.var("setup_required", SETUP_REQUIRED)
     print(f"\n  Job Dashboard")
     print(f"  Profile : {PROFILE_NAME} <{PROFILE_EMAIL}>")
     print(f"  URL     : http://localhost:{args.port}")

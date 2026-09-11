@@ -38,6 +38,13 @@ try:
 except ImportError:
     _gmail_sender = None
 
+try:
+    from apply_logger import log as _log
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent.parent))
+    from apply_logger import log as _log
+
 load_dotenv()
 
 # ── Live Gmail verification-code watcher (background asyncio task per email) ──
@@ -263,35 +270,44 @@ def add_company_interactive() -> Optional[dict]:
 
 def _get_json(url: str) -> Optional[dict | list]:
     try:
+        _log.api("GET", url)
         req = urllib.request.Request(
             url, headers={"User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)"}
         )
         with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read().decode())
+            data = json.loads(r.read().decode())
+        _log.api("GET", url, status=r.status, snippet=str(data)[:80])
+        return data
     except Exception as e:
         print(f"  [API] {e}  —  {url}")
+        _log.api("GET", url, status=getattr(e, 'code', 0), error=str(e)[:80])
         return None
 
 
 def greenhouse_list_jobs(slug: str) -> list[dict]:
     """Fetch all open jobs from Greenhouse public API."""
-    data = _get_json(
-        f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
-    )
-    if not isinstance(data, dict):
+    _url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+    _log.var("greenhouse_url", _url)
+    try:
+        data = _get_json(_url)
+        if not isinstance(data, dict):
+            return []
+        jobs = []
+        for j in data.get("jobs", []):
+            jobs.append({
+                "title":     j.get("title", "").strip(),
+                "location":  j.get("location", {}).get("name", ""),
+                "url":       j.get("absolute_url", ""),
+                "id":        str(j.get("id", "")),
+                "ats":       "greenhouse",
+                "posted_at": j.get("updated_at", ""),   # ISO-8601 string
+                "description": j.get("content", ""),
+            })
+        _log.ok(f"greenhouse_list_jobs({slug}): {len(jobs)} jobs")
+        return jobs
+    except Exception as e:
+        _log.err(f"greenhouse_list_jobs({slug}) failed", exc=e)
         return []
-    jobs = []
-    for j in data.get("jobs", []):
-        jobs.append({
-            "title":     j.get("title", "").strip(),
-            "location":  j.get("location", {}).get("name", ""),
-            "url":       j.get("absolute_url", ""),
-            "id":        str(j.get("id", "")),
-            "ats":       "greenhouse",
-            "posted_at": j.get("updated_at", ""),   # ISO-8601 string
-            "description": j.get("content", ""),
-        })
-    return jobs
 
 
 def stripe_list_jobs() -> list[dict]:
@@ -353,30 +369,37 @@ def stripe_list_jobs() -> list[dict]:
 
 def lever_list_jobs(slug: str) -> list[dict]:
     """Fetch all open jobs from Lever public API."""
-    data = _get_json(f"https://api.lever.co/v0/postings/{slug}?mode=json")
-    if not isinstance(data, list):
+    _url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
+    _log.var("lever_url", _url)
+    try:
+        data = _get_json(_url)
+        if not isinstance(data, list):
+            return []
+        jobs = []
+        for j in data:
+            hosted = j.get("hostedUrl", "") or j.get("applyUrl", "")
+            apply_url = hosted.rstrip("/") + "/apply" if hosted and "/apply" not in hosted else hosted
+            # Lever timestamps are Unix ms
+            ts_ms = j.get("createdAt", 0) or 0
+            posted_iso = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat() if ts_ms else ""
+            jobs.append({
+                "title":     j.get("text", "").strip(),
+                "location":  j.get("categories", {}).get("location", ""),
+                "team":      j.get("categories", {}).get("team", ""),
+                "url":       apply_url,
+                "id":        j.get("id", ""),
+                "ats":       "lever",
+                "posted_at": posted_iso,
+                "description": "\n".join(filter(None, (
+                    j.get("descriptionPlain", ""),
+                    j.get("additionalPlain", ""),
+                ))),
+            })
+        _log.ok(f"lever_list_jobs({slug}): {len(jobs)} jobs")
+        return jobs
+    except Exception as e:
+        _log.err(f"lever_list_jobs({slug}) failed", exc=e)
         return []
-    jobs = []
-    for j in data:
-        hosted = j.get("hostedUrl", "") or j.get("applyUrl", "")
-        apply_url = hosted.rstrip("/") + "/apply" if hosted and "/apply" not in hosted else hosted
-        # Lever timestamps are Unix ms
-        ts_ms = j.get("createdAt", 0) or 0
-        posted_iso = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat() if ts_ms else ""
-        jobs.append({
-            "title":     j.get("text", "").strip(),
-            "location":  j.get("categories", {}).get("location", ""),
-            "team":      j.get("categories", {}).get("team", ""),
-            "url":       apply_url,
-            "id":        j.get("id", ""),
-            "ats":       "lever",
-            "posted_at": posted_iso,
-            "description": "\n".join(filter(None, (
-                j.get("descriptionPlain", ""),
-                j.get("additionalPlain", ""),
-            ))),
-        })
-    return jobs
 
 
 def workday_list_jobs(
@@ -618,34 +641,45 @@ def filter_jobs(
         exp_expanded.extend(_EXP_SYNONYMS.get(e, []))
     exp_expanded = list(dict.fromkeys(exp_expanded))  # dedupe, preserve order
 
+    _log.fn("filter_jobs", total=len(jobs), keywords=keywords, experience=experience,
+            us_only=us_only, max_required_years=max_required_years)
+
     result: list[dict] = []
 
     for j in jobs:
-        if j["url"] in applied_urls:
+        _title = j["title"]
+        _jurl  = j["url"]
+
+        if _jurl in applied_urls:
+            _log.skip(f"{_title!r} — already applied")
             continue
 
-        title_lower = j["title"].lower()
+        title_lower = _title.lower()
         loc_field   = j.get("location", "").lower()
         title_loc   = f" {title_lower} {loc_field} "  # padded for whole-word synonyms
 
         if max_required_years is not None:
             rejection_reason = early_career_rejection_reason(
-                j["title"], j.get("description", ""), max_required_years,
+                _title, j.get("description", ""), max_required_years,
                 experience,
             )
             if rejection_reason:
+                _log.skip(f"{_title!r} — max_required_years: {rejection_reason}")
                 continue
 
         # keyword filter
         if kw_lower and not any(k in title_lower for k in kw_lower):
+            _log.skip(f"{_title!r} — no keyword match (kw={kw_lower})")
             continue
 
         # location filter
         if loc_lower and not any(l in loc_field for l in loc_lower):
+            _log.skip(f"{_title!r} — location mismatch (loc={j.get('location','')!r})")
             continue
 
         # US-only filter
         if us_only and not _is_us_location(j.get("location", "")):
+            _log.skip(f"{_title!r} — not US location (loc={j.get('location','')!r})")
             continue
 
         # date-posted filter
@@ -655,21 +689,26 @@ def filter_jobs(
                 try:
                     dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
                     if dt < cutoff:
+                        _log.skip(f"{_title!r} — too old (posted={raw[:10]})")
                         continue
                 except Exception:
                     pass  # unparseable date → include the job
 
         # experience-level filter (uses expanded synonyms)
         if exp_expanded and not any(e in title_loc for e in exp_expanded):
+            _log.skip(f"{_title!r} — experience mismatch (exp={exp_expanded[:4]})")
             continue
 
         # work-type filter
         if wt_lower:
             combined = title_lower + " " + loc_field
             if not any(w in combined for w in wt_lower):
+                _log.skip(f"{_title!r} — work-type mismatch (wt={wt_lower})")
                 continue
 
         result.append(j)
+
+    _log.ok(f"filter_jobs: {len(result)}/{len(jobs)} pass all filters")
 
     # If nothing matched, print a per-filter breakdown so the user knows why
     if not result and jobs:
@@ -773,6 +812,8 @@ def load_applied_urls(email: str = "") -> set[str]:
       • Successfully applied/submitted (never retry)
       • Errored >= _MAX_ERROR_RETRIES times without ever succeeding (give up)
     """
+    _log.db("read", "external_applied_jobs.csv", note=f"email={email!r}")
+    _log.var("applied_log_path", str(APPLIED_LOG_PATH))
     _init_log()
     try:
         with open(APPLIED_LOG_PATH, newline="", encoding="utf-8") as f:
@@ -799,6 +840,8 @@ def load_applied_urls(email: str = "") -> set[str]:
                  if n >= _MAX_ERROR_RETRIES and url not in successes}
 
     skip_urls = successes | exhausted
+    _log.db("read", "external_applied_jobs.csv", count=len(skip_urls),
+            note=f"successes={len(successes)} exhausted={len(exhausted)}")
     if exhausted:
         print(f"  ⚠  {len(exhausted)} job(s) skipped — errored {_MAX_ERROR_RETRIES}+ times "
               f"(likely require a cover letter / portfolio — not retrying).")
@@ -807,6 +850,7 @@ def load_applied_urls(email: str = "") -> set[str]:
 
 def log_applied(company: str, ats: str, title: str, job_url: str,
                 status: str, email: str, notes: str = "", location: str = ""):
+    _log.db("write", "external_applied_jobs.csv", value=f"{company}|{title}|{status}")
     _init_log()
     with open(APPLIED_LOG_PATH, "a", newline="", encoding="utf-8") as f:
         csv.DictWriter(f, fieldnames=APPLIED_LOG_FIELDS).writerow({
@@ -833,10 +877,14 @@ _EXTRA_FIELDS = [
 
 
 def load_all_profiles() -> dict:
+    _log.var("profiles_path", str(PROFILES_JSON))
     if not PROFILES_JSON.exists():
+        _log.null("profiles", reason="profiles.json does not exist")
         return {}
     try:
-        return json.loads(PROFILES_JSON.read_text())
+        data = json.loads(PROFILES_JSON.read_text())
+        _log.db("read", "profiles.json", count=len(data))
+        return data
     except Exception:
         return {}
 
@@ -895,7 +943,9 @@ def get_resume(profile: dict, email: str, job_title: str = "") -> Optional[Path]
     CONTENT (not just filename) against the job title keywords.
     Falls back to filename scoring, then default, then first file.
     """
+    _log.fn("get_resume", email=email, job_title=job_title)
     if not RESUMES_JSON.exists():
+        _log.null("resume", reason="resumes.json not found")
         return None
     try:
         rd = json.loads(RESUMES_JSON.read_text())
@@ -916,17 +966,25 @@ def get_resume(profile: dict, email: str, job_title: str = "") -> Optional[Path]
                 default_path = dp
 
         if not all_resumes:
+            if default_path:
+                _log.var("resume_selected", str(default_path), note="no folder, using default")
+            else:
+                _log.null("resume", reason="no matching resume file found")
             return default_path
 
         if not job_title:
-            return default_path or all_resumes[0]
+            chosen = default_path or all_resumes[0]
+            _log.var("resume_selected", str(chosen), note="no job_title, using default/first")
+            return chosen
 
         title_words = [
             w for w in re.sub(r"[^a-z0-9 ]", " ", job_title.lower()).split()
             if len(w) >= 2 and w not in _RESUME_STOPWORDS
         ]
         if not title_words:
-            return default_path or all_resumes[0]
+            chosen = default_path or all_resumes[0]
+            _log.var("resume_selected", str(chosen), note="no title keywords, using default/first")
+            return chosen
 
         best_score, best_path = -1, None
         for p in all_resumes:
@@ -945,10 +1003,17 @@ def get_resume(profile: dict, email: str, job_title: str = "") -> Optional[Path]
                 best_score, best_path = score, p
 
         if best_score > 0:
+            _log.var("resume_selected", str(best_path), note=f"content score={best_score}")
             return best_path
 
-        return default_path or all_resumes[0]
+        chosen = default_path or all_resumes[0]
+        if chosen:
+            _log.var("resume_selected", str(chosen), note="score=0, falling back to default/first")
+        else:
+            _log.null("resume", reason="no matching resume file found")
+        return chosen
     except Exception:
+        _log.null("resume", reason="no matching resume file found")
         return None
 
 
@@ -956,51 +1021,59 @@ def get_resume(profile: dict, email: str, job_title: str = "") -> Optional[Path]
 
 def answer_for(label: str, profile: dict, email: str) -> str:
     """Return the best answer for a form field, given its label text."""
+    _log.fn("answer_for", label=label)
     l = label.lower().strip()
 
     name_parts = profile.get("name", "").split()
     first = name_parts[0] if name_parts else ""
     last  = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
+    def _ret(val: str) -> str:
+        if val == "":
+            _log.null("answer_for result", reason=f"no match for label={label!r}")
+        else:
+            _log.ret("answer_for", val)
+        return val
+
     # ── Name ──
     if re.search(r"first.?name|given.?name|forename", l):
-        return first
+        return _ret(first)
     if re.search(r"last.?name|family.?name|surname", l):
-        return last
+        return _ret(last)
     if re.search(r"^name$|full.?name|your.?name", l):
-        return profile.get("name", "")
+        return _ret(profile.get("name", ""))
 
     # ── Contact ──
     if "email" in l:
-        return email
+        return _ret(email)
     if re.search(r"phone|mobile|cell|tel", l):
-        return profile.get("phone", "")
+        return _ret(profile.get("phone", ""))
 
     # ── Links ──
     if "linkedin" in l:
-        return profile.get("linkedin_url", "")
+        return _ret(profile.get("linkedin_url", ""))
     if "github" in l:
-        return profile.get("github_url", "")
+        return _ret(profile.get("github_url", ""))
     if re.search(r"website|portfolio|personal.*url|url.*personal", l):
-        return profile.get("website_url", "")
+        return _ret(profile.get("website_url", ""))
 
     # ── Work auth — MUST come before location checks (long question text can match location patterns) ──
     if re.search(r"authorized.*(work|us)|eligible.*(work|us)|legally.*work|work.*author", l):
-        return "Yes"
+        return _ret("Yes")
     if re.search(r"require.*sponsor|need.*sponsor|visa.*sponsor|sponsor.*visa|require.*company.*sponsor", l):
-        return "Yes" if profile.get("needs_sponsorship") else "No"
+        return _ret("Yes" if profile.get("needs_sponsorship") else "No")
     if re.search(r"tobacco|nicotine|cigarette|smok(e|ing)|vape|vaping|snuff", l):
-        return "No"
+        return _ret("No")
     if re.search(r"work.*auth.*type|visa.*type|visa.*status|immigration.*status", l):
-        return profile.get("work_auth", "OPT")
+        return _ret(profile.get("work_auth", "OPT"))
 
     # ── Location ──
     # "where.*you.*located" — only match "where are you located?", NOT "where the job is located"
     if re.search(r"^city$|^location$|current.*location|where.*you.*located|city.*state", l):
-        return profile.get("location", "")
+        return _ret(profile.get("location", ""))
     if re.search(r"^state$", l):
         parts = profile.get("location", "").split(",")
-        return parts[-1].strip() if len(parts) > 1 else ""
+        return _ret(parts[-1].strip() if len(parts) > 1 else "")
     # Match country-of-residence/location questions — narrow enough to avoid "country where job is located"
     if re.search(
         r"^country[\s\*:]*$"
@@ -1010,60 +1083,60 @@ def answer_for(label: str, profile: dict, email: str) -> str:
         r"|your\s+country\s+of\s+residence",
         l,
     ):
-        return "United States"
+        return _ret("United States")
     if re.search(r"zip|postal", l):
-        return ""
+        return _ret("")
 
     # ── Education ──
     if re.search(r"^school$|^university$|^college$|^institution$|school.*name|university.*name|"
                  r"where.*study|where.*attend|education.*institution|name.*school", l):
-        return profile.get("school", "")
+        return _ret(profile.get("school", ""))
     if re.search(r"field.*study|area.*study|major|discipline|concentration|program.*study", l):
-        return profile.get("field_of_study", profile.get("major", ""))
+        return _ret(profile.get("field_of_study", profile.get("major", "")))
     if re.search(r"^degree$|degree.*type|type.*degree|degree.*level|level.*degree|highest.*degree|level.*education|"
                  r"education.*level", l):
-        return profile.get("degree", "")
+        return _ret(profile.get("degree", ""))
     if re.search(r"graduation.*year|year.*graduation|grad.*year|expected.*graduation", l):
-        return profile.get("graduation_year", "")
+        return _ret(profile.get("graduation_year", ""))
 
     # ── Experience ──
     if re.search(r"years.*experience|experience.*years|how many years", l):
-        return str(profile.get("years_experience", ""))
+        return _ret(str(profile.get("years_experience", "")))
 
     # ── Current role ──
     if re.search(r"current.*title|job.*title|position.*title|role.*title", l):
-        return profile.get("current_title", "")
+        return _ret(profile.get("current_title", ""))
     if re.search(r"current.*company|current.*employer|where.*work|previous.*employer|current.*or.*previous.*employer", l):
         # Return profile value if set; otherwise return empty so Ollama handles it
-        return profile.get("current_company", "")
+        return _ret(profile.get("current_company", ""))
 
     # ── Salary ──
     if re.search(r"salary|compensation|pay|rate|expected", l):
-        return profile.get("expected_salary", "Open to discussion")
+        return _ret(profile.get("expected_salary", "Open to discussion"))
 
     # ── Remote / work arrangement ──
     if re.search(r"remote|onsite|hybrid|work.*type|work.*arrangement|preferred.*work", l):
-        return profile.get("preferred_work", "Any")
+        return _ret(profile.get("preferred_work", "Any"))
 
     # ── Disability — hardcoded: decline to self-identify ──
     if re.search(r"disabilit", l):
-        return "I don't wish to answer"
+        return _ret("I don't wish to answer")
 
     # ── Veteran — hardcoded to exact Greenhouse option text ──
     if re.search(r"veteran", l):
-        return "I am not a protected veteran"
+        return _ret("I am not a protected veteran")
 
     # ── EEO / demographic ──────────────────────────────────────────────────────
     if re.search(r"\brace\b|ethnicity|racial", l):
-        return profile.get("race", "")
+        return _ret(profile.get("race", ""))
     if re.search(r"gender|eeo|diversity", l):
-        return profile.get("gender", "")
+        return _ret(profile.get("gender", ""))
 
     # ── Cover letter / additional — skip ──
     if re.search(r"cover.?letter|additional.*info|anything.*else|tell.*us.*more", l):
-        return ""
+        return _ret("")
 
-    return ""
+    return _ret("")
 
 
 def answer_bool(label: str, profile: dict) -> bool:

@@ -14,6 +14,7 @@ from playwright.async_api import async_playwright, Page
 from company_apply.common import answer_for
 
 from job_eligibility import early_career_rejection_reason
+from apply_logger import log as _log
 
 HERE = Path(__file__).parent
 PROFILES_JSON = HERE / "profiles.json"
@@ -91,9 +92,13 @@ def title_matches(title: str, keywords: list[str]) -> bool:
 
 
 async def wait_for_login(page: Page, timeout: int = 600) -> None:
+    _log.fn("wait_for_login", timeout=timeout)
+    _log.info(f"Waiting up to {timeout}s for Handshake login to complete")
     deadline = asyncio.get_running_loop().time() + timeout
+    _check_count = 0
     while asyncio.get_running_loop().time() < deadline:
         if page.is_closed():
+            _log.err("Handshake login browser was closed unexpectedly", exc=None)
             raise RuntimeError("Handshake login browser was closed")
         url = page.url.lower()
         body = ""
@@ -101,9 +106,15 @@ async def wait_for_login(page: Page, timeout: int = 600) -> None:
             body = (await page.locator("body").inner_text(timeout=1000)).lower()
         except Exception:
             pass
+        _check_count += 1
+        if _check_count % 15 == 1:
+            _log.var("login_check", _check_count, note=f"url={page.url[:80]}")
         if "login" not in url and ("job search" in body or "search jobs" in body or "/postings" in url):
+            _log.ok(f"Handshake login detected after {_check_count} checks — url={page.url}")
+            _log.ret("wait_for_login", "success")
             return
         await asyncio.sleep(2)
+    _log.err(f"Timed out waiting for Handshake login after {timeout}s ({_check_count} checks)", exc=None)
     raise RuntimeError("Timed out waiting for Handshake login")
 
 
@@ -122,7 +133,10 @@ async def login(email: str) -> None:
 
 
 async def collect_jobs(page: Page, keywords: list[str]) -> list[dict]:
+    _log.fn("collect_jobs", keywords=keywords)
+    _log.var("keyword_count", len(keywords), note=f"keywords: {', '.join(keywords[:10])}")
     url = "https://app.joinhandshake.com/job-search"
+    _log.nav(url, status="loading", title="Handshake job search")
     await page.goto(url, wait_until="domcontentloaded", timeout=0)
     for _ in range(20):
         await page.wait_for_timeout(1000)
@@ -143,10 +157,13 @@ async def collect_jobs(page: Page, keywords: list[str]) -> list[dict]:
                 await clear.click(force=True)
                 await page.wait_for_timeout(1500)
                 print("[Handshake] Cleared saved collection filter", flush=True)
+                _log.info("Cleared saved collection filter on Handshake")
     except Exception as exc:
         print(f"[Handshake] Could not clear saved collection filter: {exc}", flush=True)
+        _log.warn("Could not clear saved collection filter", exc=exc)
 
     jobs: dict[str, dict] = {}
+    _skipped_filter = 0
     for link in await page.locator("a[href]").all():
         try:
             href = await link.get_attribute("href")
@@ -171,8 +188,14 @@ async def collect_jobs(page: Page, keywords: list[str]) -> list[dict]:
         absolute = href if href.startswith("http") else "https://app.joinhandshake.com" + href
         absolute = re.sub(r"/job-search/(\d+)", r"/jobs/\1", absolute)
         if absolute not in jobs and title_matches(text, keywords):
+            _log.var("job_found", text[:80], note=absolute)
             jobs[absolute] = {"title": text, "url": absolute}
+        elif absolute not in jobs:
+            _log.skip(f"job filtered (keyword mismatch): {text[:80]!r}")
+            _skipped_filter += 1
+    _log.var("jobs_collected", len(jobs), note=f"skipped_keyword={_skipped_filter}")
     if not jobs:
+        _log.warn("No job cards found on Handshake — check debug screenshot", exc=None)
         try:
             await page.screenshot(path="/tmp/handshake_jobs_debug.png", full_page=True)
             body = " ".join((await page.locator("body").inner_text()).split())
@@ -182,13 +205,19 @@ async def collect_jobs(page: Page, keywords: list[str]) -> list[dict]:
             print(f"[Handshake] Buttons: {(await page.locator('button').all_inner_texts())[:30]}", flush=True)
         except Exception:
             pass
+    _log.ret("collect_jobs", f"{len(jobs)} jobs")
     return list(jobs.values())
 
 
 async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -> str:
+    _log.fn("apply_job", title=job.get("title"), url=job.get("url"))
+    _log.var("job_title", job.get("title"), note="beginning Handshake application")
+    _log.var("job_url", job.get("url"))
+    _log.var("resume", str(resume) if resume else None, note="resume selected")
     job_id_match = re.search(r"/(?:jobs|job-search)/(\d+)", job["url"])
     if job_id_match:
         print("  [Step 2] Opening Handshake job detail...", flush=True)
+        _log.info(f"Navigating to job-search to locate card for job id={job_id_match.group(1)}")
         await page.goto("https://app.joinhandshake.com/job-search", wait_until="domcontentloaded", timeout=30000)
         for _ in range(20):
             await page.wait_for_timeout(750)
@@ -196,12 +225,16 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
             if await card.count() and await card.is_visible(timeout=500):
                 await card.click(timeout=5000)
                 print("  [Step 2] Job detail opened; looking for Apply externally...", flush=True)
+                _log.browser("click", f"job card for id={job_id_match.group(1)}", result="job detail opened")
                 break
         else:
+            _log.warn(f"Job card not found in listing — navigating directly to {job['url']}", exc=None)
             await page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
     else:
+        _log.info(f"No job id in URL — navigating directly to {job['url']}")
         await page.goto(job["url"], wait_until="domcontentloaded", timeout=30000)
     await page.wait_for_timeout(5000)
+    _log.state(page_url=page.url, heading=job.get("title", ""), buttons=[])
     apply_control = None
     for locator in (
         page.get_by_role("button").filter(has_text=re.compile(r"apply|application|quick apply", re.I)),
@@ -218,14 +251,17 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
         if apply_control:
             break
     if not apply_control:
+        _log.warn("No apply control found on Handshake job detail page", exc=None)
         try:
             await page.screenshot(path="/tmp/handshake_job_debug.png", full_page=True)
             controls = await page.locator("button, a, [role=button]").all_inner_texts()
             print(f"  [Handshake] No apply control. Visible controls: {controls[:30]}", flush=True)
         except Exception:
             pass
+        _log.ret("apply_job", "skipped - no Handshake apply button")
         return "skipped - no Handshake apply button"
     print("  [Step 2] Apply externally control found; clicking...", flush=True)
+    _log.browser("find", "Apply / Apply externally button", result="found on job detail page")
     target = page
     clicked = False
     try:
@@ -233,70 +269,100 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
             await apply_control.click(timeout=5000)
             clicked = True
             print("  [Step 2] Apply externally clicked; waiting for employer site...", flush=True)
+            _log.browser("click", "Apply externally", result="popup expected")
         target = await popup_info.value
         await target.wait_for_load_state("domcontentloaded", timeout=15000)
-    except Exception:
+        _log.nav(target.url, status="popup", title="employer ATS popup")
+    except Exception as _popup_exc:
+        _log.warn("No popup detected from Apply click — checking if same-page or retry", exc=_popup_exc)
         if not clicked:
             try:
                 await apply_control.click(timeout=5000)
                 clicked = True
-            except Exception:
+                _log.browser("click", "Apply externally (retry)", result="clicked")
+            except Exception as _click_exc:
+                _log.err("External apply control could not be clicked", exc=_click_exc)
                 return "error: external apply control could not be clicked"
     page = target
     await page.wait_for_timeout(1800)
     # Some employer portals route through Google account selection after the
     # external link. Choose the signed-in profile account when it is shown.
     if "accounts.google.com" in page.url or "choose an account" in (await page.locator("body").inner_text()).lower():
+        _log.info("Google account chooser detected — selecting profile account")
         account = page.get_by_text(profile.get("email", ""), exact=True).first
         if await account.count() and await account.is_visible(timeout=1500):
             await account.click()
             await page.wait_for_timeout(2500)
             print(f"  [External] Selected Google account {profile.get('email', '')}", flush=True)
+            _log.browser("click", f"Google account: {profile.get('email', '')}", result="selected")
     if "joinhandshake.com" not in page.url:
         print(f"  [Handshake] External application opened: {page.url}", flush=True)
+        _log.nav(page.url, status="external", title="employer ATS page")
 
     # Reuse the tested ATS engines for employer redirects.
     external_url = page.url.lower()
     if "myworkdayjobs.com" in external_url:
+        _log.var("ats_detected", "Workday", note=external_url)
         try:
             from company_apply.workday import _fill_workday
             status = await _fill_workday(
                 page, profile, profile.get("email", ""), resume,
                 "Handshake external employer", new_pages=[]
             )
+            _log.var("ats_result", status, note="Workday fill result")
+            _log.ret("apply_job", status)
             return status
         except Exception as exc:
+            _log.err("Workday form fill failed", exc=exc)
             return f"error: external Workday form {str(exc)[:120]}"
     if "greenhouse.io" in external_url:
+        _log.var("ats_detected", "Greenhouse", note=external_url)
         try:
             from company_apply.greenhouse import _fill_greenhouse
-            return await _fill_greenhouse(page, profile, profile.get("email", ""), resume, job.get("title", ""), "Handshake external employer")
+            status = await _fill_greenhouse(page, profile, profile.get("email", ""), resume, job.get("title", ""), "Handshake external employer")
+            _log.var("ats_result", status, note="Greenhouse fill result")
+            _log.ret("apply_job", status)
+            return status
         except Exception as exc:
+            _log.err("Greenhouse form fill failed", exc=exc)
             return f"error: external Greenhouse form {str(exc)[:120]}"
     if "lever.co" in external_url:
+        _log.var("ats_detected", "Lever", note=external_url)
         try:
             from company_apply.lever import _fill_lever
-            return await _fill_lever(page, profile, profile.get("email", ""), resume)
+            status = await _fill_lever(page, profile, profile.get("email", ""), resume)
+            _log.var("ats_result", status, note="Lever fill result")
+            _log.ret("apply_job", status)
+            return status
         except Exception as exc:
+            _log.err("Lever form fill failed", exc=exc)
             return f"error: external Lever form {str(exc)[:120]}"
     if "ashbyhq.com" in external_url:
+        _log.var("ats_detected", "Ashby", note=external_url)
         try:
             from company_apply.ashby import _fill_ashby
-            return await _fill_ashby(page, profile, profile.get("email", ""), resume)
+            status = await _fill_ashby(page, profile, profile.get("email", ""), resume)
+            _log.var("ats_result", status, note="Ashby fill result")
+            _log.ret("apply_job", status)
+            return status
         except Exception as exc:
+            _log.err("Ashby form fill failed", exc=exc)
             return f"error: external Ashby form {str(exc)[:120]}"
 
+    _log.var("ats_detected", "generic/unknown", note=external_url)
+    _log.info("No known ATS detected — using generic form fill (fill_basic_info path)")
     await page.wait_for_timeout(1200)
     if resume:
         file_inputs = page.locator("input[type=file]")
         if await file_inputs.count():
             await file_inputs.first.set_input_files(str(resume))
+            _log.browser("upload", str(resume), result="resume uploaded to generic form")
 
     name_parts = profile.get("name", "").split()
     _loc_parts = [p.strip() for p in profile.get("location", "").split(",")]
     _city_val  = profile.get("city") or (_loc_parts[0] if _loc_parts else "")
     _state_val = profile.get("state") or (_loc_parts[1] if len(_loc_parts) > 1 else "")
-    for field, value in {
+    _basic_fields = {
         "email": profile.get("email", ""),
         "phone": profile.get("phone", ""),
         "first name": name_parts[0] if name_parts else "",
@@ -305,14 +371,18 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
         "city": _city_val,
         "state": _state_val,
         "zip": profile.get("postal_code", ""),
-    }.items():
+    }
+    for field, value in _basic_fields.items():
         if not value:
+            _log.null(f"basic_field[{field}]", reason="empty in profile")
             continue
         locator = page.get_by_label(re.compile(field, re.I)).first
         if await locator.count():
             try:
                 await locator.fill(str(value))
-            except Exception:
+                _log.var(f"basic_field[{field}]", str(value)[:60], note="filled")
+            except Exception as _fe:
+                _log.warn(f"basic_field[{field}] fill failed", exc=_fe)
                 pass
 
     # Fill standard employer fields using the same profile answer mapper as
@@ -329,8 +399,10 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
                 label = " ".join((await control.locator("xpath=..").inner_text()).split())
             value = answer_for(label, profile, profile.get("email", ""))
             if value and not await control.input_value():
+                _log.var(f"generic_field[{label[:50]}]", value[:80], note="filled via answer_for")
                 await control.fill(str(value))
-        except Exception:
+        except Exception as _ge:
+            _log.warn(f"generic field fill error", exc=_ge)
             pass
 
     for select in await page.locator("select").all():
@@ -346,8 +418,10 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
                 text = " ".join((await option.inner_text()).split())
                 if answer.lower() in text.lower() or text.lower() in answer.lower():
                     await select.select_option(label=text)
+                    _log.var(f"select[{label[:50]}]", text, note="selected option")
                     break
-        except Exception:
+        except Exception as _se:
+            _log.warn(f"select fill error", exc=_se)
             pass
 
     # Accept ordinary application acknowledgements, but never guess at
@@ -358,30 +432,44 @@ async def apply_job(page: Page, job: dict, resume: Path | None, profile: dict) -
             if any(word in label for word in ("terms", "privacy", "acknowledge", "consent")):
                 if not await checkbox.is_checked():
                     await checkbox.check()
-        except Exception:
+                    _log.browser("check", f"checkbox: {label[:60]}", result="checked (terms/consent)")
+        except Exception as _ce:
+            _log.warn(f"checkbox check error", exc=_ce)
             pass
 
     if "captcha" in (await page.locator("body").inner_text()).lower():
+        _log.warn("CAPTCHA detected on external form — blocked", exc=None)
+        _log.ret("apply_job", "blocked - CAPTCHA requires manual completion")
         return "blocked - CAPTCHA requires manual completion"
 
     submit = page.locator("button[type='submit'], input[type='submit']").last
     if not await submit.count():
         submit = page.get_by_role("button").filter(has_text=re.compile(r"submit|send application|apply|continue|finish", re.I)).last
     if await submit.count() and await submit.is_visible(timeout=1500):
+        _log.browser("click", "Submit button (generic form)", result="clicking")
         try:
             await submit.click(timeout=5000)
-        except Exception:
+        except Exception as _submit_exc:
+            _log.err("Submit click failed on generic external form", exc=_submit_exc)
             return "external application opened; submit control unavailable"
         await page.wait_for_timeout(1500)
         body = (await page.locator("body").inner_text()).lower()
         if any(word in body for word in ("thank you", "application submitted", "applied successfully")):
+            _log.ok(f"Generic external form submitted successfully: {job.get('title')!r}")
+            _log.ret("apply_job", "applied")
             return "applied"
     if "joinhandshake.com" not in page.url:
+        _log.warn("External form submitted but confirmation text not found — more fields may be required", exc=None)
+        _log.ret("apply_job", "external application opened; form requires additional fields")
         return "external application opened; form requires additional fields"
+    _log.warn("Submit fell through — unconfirmed", exc=None)
+    _log.ret("apply_job", "submitted (unconfirmed)")
     return "submitted (unconfirmed)"
 
 
 async def run(args) -> None:
+    _log.step("Handshake Apply: Session Start")
+    _log.fn("run", profile=args.profile, login=args.login)
     profile = profile_for(args.profile)
     if args.login:
         await login(args.profile)
@@ -402,8 +490,14 @@ async def run(args) -> None:
     ]
     levels = [item.strip() for item in args.experience_levels.split(",") if item.strip()]
     max_years = max(0, min(4, args.max_required_years))
+    _log.var("keywords", keywords, note=f"{len(keywords)} keyword(s)")
+    _log.var("experience_levels", levels)
+    _log.var("max_required_years", max_years)
     print(f"Keywords: {', '.join(keywords)}", flush=True)
     print("Resume: selecting the best matching uploaded resume per job", flush=True)
+    _total_applied = 0
+    _total_skipped = 0
+    _total_errors = 0
     async with async_playwright() as playwright:
         context = await playwright.chromium.launch_persistent_context(str(session_dir(args.profile)), headless=False, locale="en-US")
         page = await context.new_page()
@@ -413,30 +507,50 @@ async def run(args) -> None:
             reason = early_career_rejection_reason(job["title"], "", max_years, levels)
             if not reason:
                 eligible.append(job)
+            else:
+                _log.skip(f"eligibility rejected: {job['title']!r} — {reason}")
         eligible = eligible[:args.max_jobs] if args.max_jobs else eligible
+        _log.var("total_jobs_found", len(jobs))
+        _log.var("total_eligible", len(eligible))
         print(f"Found {len(jobs)} related jobs; {len(eligible)} eligible.", flush=True)
         for index, job in enumerate(eligible, 1):
             if page.is_closed():
                 page = await context.new_page()
                 print("  [Browser] Reopened Handshake page for next job", flush=True)
+                _log.warn("Browser page was closed — reopened for next job", exc=None)
             resume = resume_for(args.profile, job["title"])
             print(f"[{index}/{len(eligible)}] {job['title']}\n  {job['url']}", flush=True)
             print(f"  Resume selected: {resume or 'not configured'}", flush=True)
+            _log.var(f"job[{index}]", job["title"], note=job["url"])
             try:
                 status = await asyncio.wait_for(
                     apply_job(page, job, resume, profile), timeout=180
                 )
                 print(f"  → {status}", flush=True)
                 if status in ("applied", "submitted (unconfirmed)") or status.startswith("external application"):
+                    _total_applied += 1
+                    _log.ok(f"[{index}/{len(eligible)}] Recorded: {job['title']!r} → {status} | tally: applied={_total_applied} skipped={_total_skipped} errors={_total_errors}")
                     write_application(email=args.profile, job=job, status=status)
+                elif status.startswith("skipped"):
+                    _total_skipped += 1
+                    _log.skip(f"[{index}/{len(eligible)}] {job['title']!r} — {status}")
+                else:
+                    _total_errors += 1
+                    _log.warn(f"[{index}/{len(eligible)}] Non-success: {job['title']!r} → {status}", exc=None)
             except asyncio.TimeoutError:
+                _total_errors += 1
+                _log.err(f"apply_job timed out for {job['title']!r}", exc=None)
                 print("  → error: external application timed out before Step 2; continuing", flush=True)
             except Exception as exc:
+                _total_errors += 1
+                _log.err(f"apply_job exception for {job['title']!r}", exc=exc)
                 print(f"  → error: {str(exc)[:120]}", flush=True)
+        _log.var("final_tally", f"applied={_total_applied} skipped={_total_skipped} errors={_total_errors}", note="Handshake Apply session complete")
         await context.close()
 
 
 def write_application(email: str, job: dict, status: str) -> None:
+    _log.db("write", "handshake_applied_jobs.csv", value=f"{job.get('title')}|{status}")
     exists = APPLIED_CSV.exists()
     with APPLIED_CSV.open("a", newline="") as handle:
         writer = csv.writer(handle)

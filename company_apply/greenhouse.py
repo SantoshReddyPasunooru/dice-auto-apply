@@ -8,6 +8,14 @@ from typing import Optional
 
 from playwright.async_api import Page, Frame, BrowserContext
 
+try:
+    from apply_logger import log as _log
+except ImportError:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).parent.parent))
+    from apply_logger import log as _log
+
 # ── Imports from sibling modules ────────────────────────────────────────────────
 from .common import (
     answer_for,
@@ -28,6 +36,7 @@ from .common import (
 
 async def _fill_text_inputs(page: Page, profile: dict, email: str):
     """Fill all visible unfilled text/email/tel/textarea inputs by their label."""
+    _log.fn("_fill_text_inputs", email=email)
     for inp in await page.locator(
         "input[type='text'], input[type='email'], input[type='tel'], textarea"
     ).all():
@@ -51,13 +60,18 @@ async def _fill_text_inputs(page: Page, profile: dict, email: str):
                 )
             val = answer_for(label, profile, email)
             if val:
+                _log.var(f"text_input[{label[:50]}]", val[:80], note="filling field")
                 await inp.fill(val)
-        except Exception:
+            else:
+                _log.skip(f"text_input[{label[:50]}] — no answer found in profile")
+        except Exception as e:
+            _log.warn(f"_fill_text_inputs: error on field", exc=e)
             pass
 
 
 async def _fill_selects(page: Page, profile: dict, email: str):
     """Fill all visible unfilled <select> elements by their label."""
+    _log.fn("_fill_selects", email=email)
     for sel_el in await page.locator("select").all():
         try:
             if not await sel_el.is_visible(timeout=0):
@@ -82,6 +96,7 @@ async def _fill_selects(page: Page, profile: dict, email: str):
                 ".map(o => ({value: o.value, text: o.text.trim().toLowerCase()}))"
             )
             if not opts:
+                _log.skip(f"select[{label[:50]}] — no options available")
                 continue
 
             val_lower = val.lower() if val else ""
@@ -96,15 +111,20 @@ async def _fill_selects(page: Page, profile: dict, email: str):
                 chosen = next((o["value"] for o in opts if "prefer not" in o["text"]), None)
             if not chosen:
                 chosen = opts[0]["value"]
+            _log.var(f"select[{label[:50]}]", chosen, note=f"profile value={val!r}")
             await sel_el.select_option(value=chosen)
-        except Exception:
+        except Exception as e:
+            _log.warn(f"_fill_selects: error on select field", exc=e)
             pass
 
 
 async def _upload_resume(page: Page, resume: Optional[Path], label: str = ""):
     """Find the resume file input and upload. Works for hidden inputs too."""
+    _log.fn("_upload_resume", resume=str(resume) if resume else None, label=label)
     if not resume or not resume.exists():
+        _log.null("resume", reason="resume path is None or file does not exist")
         return False
+    _log.var("resume_file", str(resume), note="uploading resume")
     for sel in [
         "input#resume",
         "input[name='resume']",
@@ -119,10 +139,15 @@ async def _upload_resume(page: Page, resume: Optional[Path], label: str = ""):
             if await el.count() > 0:
                 await el.set_input_files(str(resume))
                 print(f"      → Resume: {resume.name}{' [' + label + ']' if label else ''}")
+                _log.ok(f"Resume uploaded via selector {sel!r}: {resume.name}")
                 await asyncio.sleep(2)
+                _log.ret("_upload_resume", True)
                 return True
-        except Exception:
+        except Exception as e:
+            _log.warn(f"Resume upload attempt failed for selector {sel!r}", exc=e)
             pass
+    _log.warn("Resume upload: no matching file input found", exc=None)
+    _log.ret("_upload_resume", False)
     return False
 
 
@@ -346,8 +371,10 @@ async def _gh_submit(target, outer_page: Page = None, email: str = "") -> str:
     outer_page: the outer Page (for captcha detection); defaults to target.
     Only matches form-submit button text — NOT 'Apply Now' / 'Apply'.
     """
+    _log.fn("_gh_submit", email=email)
     captcha_page = outer_page if outer_page is not None else target
     if await has_captcha(captcha_page):
+        _log.warn("CAPTCHA detected — pausing for manual solve", exc=None)
         await pause_for_captcha(captcha_page)
 
     async def _check_confirmed(t, outer) -> str | None:
@@ -387,56 +414,80 @@ async def _gh_submit(target, outer_page: Page = None, email: str = "") -> str:
             btn = target.get_by_role("button", name=re.compile(f"^{btn_text}$", re.I)).first
             if not await btn.is_visible(timeout=0):
                 continue
+            _log.browser("find", f"button[role=button name={btn_text!r}]", result="found submit button")
             pre_url = ""
             try:
                 pre_url = target.url
             except Exception:
                 pass
+            _log.browser("click", btn_text, result="clicking submit button")
             await btn.click()
             await asyncio.sleep(SUBMIT_WAIT)
             # Handle email verification code screen if it appears
             _verify_result = await _handle_verification_code(target, captcha_page, email=email)
             if _verify_result == "no_code":
+                _log.err("Email verification required but code not retrieved", exc=None)
                 return "error: email verification required — code not retrieved"
             # URL change in iframe = navigation to confirmation page
             try:
                 post_url = target.url
                 if pre_url and post_url != pre_url:
+                    _log.nav(post_url, status="url_changed", title="post-submit URL change → applied")
+                    _log.ok("URL changed after submit — applied")
+                    _log.ret("_gh_submit", "applied")
                     return "applied"
             except Exception:
                 pass
             result = await _check_confirmed(target, captcha_page)
             if result:
+                _log.var("submit_confirmed_result", result, note="_check_confirmed returned result")
+                if result == "applied":
+                    _log.ok(f"Submission confirmed: {result}")
+                else:
+                    _log.warn(f"Submission result: {result}", exc=None)
+                _log.ret("_gh_submit", result)
                 return result
+            _log.warn("Submit clicked but confirmation not detected — unconfirmed", exc=None)
+            _log.ret("_gh_submit", "submitted (unconfirmed)")
             return "submitted (unconfirmed)"
-        except Exception:
+        except Exception as e:
+            _log.warn(f"Submit attempt for button {btn_text!r} failed", exc=e)
             pass
 
     # Fallback: input[type=submit] (classic board)
     try:
         sub = target.locator("input[type='submit']").first
         if await sub.is_visible(timeout=0):
+            _log.browser("find", "input[type='submit']", result="found classic submit input")
             pre_url = ""
             try:
                 pre_url = target.url
             except Exception:
                 pass
+            _log.browser("click", "input[type='submit']", result="clicking classic submit input")
             await sub.click()
             await asyncio.sleep(SUBMIT_WAIT)
             # Handle email verification code screen if it appears
             _verify_result = await _handle_verification_code(target, captcha_page, email=email)
             if _verify_result == "no_code":
+                _log.err("Email verification required but code not retrieved (classic board)", exc=None)
                 return "error: email verification required — code not retrieved"
             try:
                 if pre_url and target.url != pre_url:
+                    _log.ok("URL changed after classic submit — applied")
+                    _log.ret("_gh_submit", "applied")
                     return "applied"
             except Exception:
                 pass
             result = await _check_confirmed(target, captcha_page)
             if result:
+                _log.var("classic_submit_result", result)
+                _log.ret("_gh_submit", result)
                 return result
+            _log.ret("_gh_submit", "submitted (unconfirmed)")
             return "submitted (unconfirmed)"
-    except Exception:
+    except Exception as e:
+        _log.warn("Classic input[type=submit] fallback failed", exc=e)
         pass
 
     # ── Broad CSS fallback: scroll page then try button[type=submit] / data attrs ──
@@ -453,28 +504,39 @@ async def _gh_submit(target, outer_page: Page = None, email: str = "") -> str:
         try:
             sub = target.locator(sel).last
             if await sub.count() > 0 and await sub.is_visible(timeout=0):
+                _log.browser("find", sel, result="found submit via CSS fallback")
                 pre_url = ""
                 try:
                     pre_url = target.url
                 except Exception:
                     pass
+                _log.browser("click", sel, result="clicking CSS fallback submit")
                 await sub.click()
                 await asyncio.sleep(SUBMIT_WAIT)
                 _verify_result = await _handle_verification_code(target, captcha_page, email=email)
                 if _verify_result == "no_code":
+                    _log.err("Email verification required but code not retrieved (CSS fallback)", exc=None)
                     return "error: email verification required — code not retrieved"
                 try:
                     if pre_url and target.url != pre_url:
+                        _log.ok(f"URL changed after CSS fallback submit via {sel!r}")
+                        _log.ret("_gh_submit", "applied")
                         return "applied"
                 except Exception:
                     pass
                 result = await _check_confirmed(target, captcha_page)
                 if result:
+                    _log.var("css_fallback_result", result)
+                    _log.ret("_gh_submit", result)
                     return result
+                _log.ret("_gh_submit", "submitted (unconfirmed)")
                 return "submitted (unconfirmed)"
-        except Exception:
+        except Exception as e:
+            _log.warn(f"CSS fallback submit failed for selector {sel!r}", exc=e)
             pass
 
+    _log.err("Submit button not found after all strategies", exc=None)
+    _log.ret("_gh_submit", "error: submit button not found")
     return "error: submit button not found"
 
 
@@ -1041,6 +1103,8 @@ async def _fill_greenhouse(page: Page, profile: dict, email: str,
       • job-boards.greenhouse.io/{slug}/jobs/{id}     — new React board (2024+)
       • custom domain with embedded iframe (Airbnb)   — GH form inside grnhse_iframe
     """
+    _log.step(f"Greenhouse: Fill Application — {company} / {job_title}")
+    _log.fn("_fill_greenhouse", company=company, job_title=job_title, email=email, resume=str(resume) if resume else None)
     try:
         await page.wait_for_load_state("load", timeout=30000)
     except Exception:
@@ -1055,7 +1119,9 @@ async def _fill_greenhouse(page: Page, profile: dict, email: str,
         await page.locator("iframe#grnhse_iframe").count() > 0
         and not await _grnhse_iframe_expanded(page)
     )
+    _log.var("has_collapsed_iframe", has_collapsed_iframe, note="grnhse_iframe present but collapsed")
     if has_collapsed_iframe or not await _gh_form_present(page):
+        _log.browser("scroll+click", "Apply button", result="searching for apply button")
         page = await _scroll_and_click_apply(page)
         # Wait for iframe to expand OR standard selectors to appear
         try:
@@ -1088,9 +1154,12 @@ async def _fill_greenhouse(page: Page, profile: dict, email: str,
         target = frame
         target_url = frame.url
         print(f"      → Form in embedded iframe: {target_url.split('?')[0]}")
+        _log.var("target_url", target_url.split("?")[0], note="form in embedded iframe")
+        _log.nav(target_url.split("?")[0], status="iframe", title="Greenhouse embedded iframe")
     else:
         target = page
         target_url = page.url
+        _log.var("target_url", target_url, note="form on main page (no iframe)")
 
     # ── Step 3: detect board type ─────────────────────────────────────────────
     is_new_board = (
@@ -1100,56 +1169,99 @@ async def _fill_greenhouse(page: Page, profile: dict, email: str,
             "[data-testid='job-application']"
         ).count() > 0
     )
+    _log.var("is_new_board", is_new_board, note="True=React board (2024+), False=classic HTML board")
 
     # ── Step 4: upload resume first (before interactive questions) ───────────
-    await _upload_resume(target, resume, "greenhouse")
+    if resume:
+        _log.var("resume_path", str(resume), note="attempting upload")
+        _log.browser("upload", str(resume), result="calling _upload_resume")
+    else:
+        _log.null("resume", reason="no resume path provided")
+    _resume_ok = await _upload_resume(target, resume, "greenhouse")
+    if _resume_ok:
+        _log.ok(f"Resume uploaded: {resume.name if resume else 'unknown'}")
+    else:
+        _log.warn("Resume upload failed or skipped", exc=None)
 
     # ── Step 5: collect answers interactively, fill, submit ───────────────────
     print(f"      → Reading form fields...")
+    _log.info("Collecting form answers via _collect_form_answers")
     answers = await _collect_form_answers(target, profile, email, job_title, company, resume)
+    _log.var("answers_count", len(answers) if answers else 0, note="number of form field answers collected")
+    if answers:
+        for _q, _a in (answers.items() if isinstance(answers, dict) else enumerate(answers)):
+            _log.var(f"answer[{str(_q)[:40]}]", str(_a)[:120])
     await asyncio.sleep(1)
+    _log.info("Applying collected answers via _apply_collected_answers")
     await _apply_collected_answers(target, answers)
     await asyncio.sleep(3)          # let React settle all field changes
 
     # Location City needs special treatment (autocomplete field)
     city = profile.get("location", "").split(",")[0].strip()
+    if city:
+        _log.var("city", city, note="filling location/city autocomplete field")
+    else:
+        _log.null("city", reason="location not set in profile")
     await _fill_location_city(target, city, page)
     await asyncio.sleep(1)
 
+    _log.info("Ensuring country field is set to United States")
     await _ensure_country_filled(target)
     await asyncio.sleep(2)          # let all changes settle before submit
 
     # ── Step 6: fill any remaining React Select dropdowns still showing "Select..." ─
+    _log.info("Filling remaining React Select dropdowns via _fill_all_react_selects")
     await _fill_all_react_selects(target, profile, job_title, company, email)
     await asyncio.sleep(1)
 
     # ── Step 7: submit — multi-pass rescue on validation errors ──────────────────
+    _log.browser("click", "Submit Application button", result="attempting _gh_submit pass 1")
     status = await _gh_submit(target, outer_page=page, email=email)
+    _log.var("status_pass1", status, note="result after first submit attempt")
     if status.startswith("error: form validation"):
         print(f"      → Validation error — running React Select rescue pass...")
+        _log.warn(f"Validation error on pass 1: {status} — running React Select rescue pass")
         await _fill_all_react_selects(target, profile, job_title, company, email)
         await asyncio.sleep(1)
         # Also rescue empty required text/URL inputs (e.g. LinkedIn URL)
+        _log.info("Rescuing empty required text/URL inputs via _rescue_empty_required_inputs")
         await _rescue_empty_required_inputs(target, profile, email, job_title, company, resume)
         await asyncio.sleep(1)
+        _log.browser("click", "Submit Application button", result="attempting _gh_submit pass 2")
         status = await _gh_submit(target, outer_page=page, email=email)
+        _log.var("status_pass2", status, note="result after second submit attempt")
 
     # If still failing and the error mentions a specific field, attempt targeted fill
     if status.startswith("error: form validation"):
         err_field = status[len("error: form validation — "):].lower()
+        _log.warn(f"Validation error on pass 2 — field hint: {err_field!r}")
         if "linkedin" in err_field:
+            _log.info("Attempting LinkedIn field rescue via _rescue_linkedin_field")
             await _rescue_linkedin_field(target, profile)
             await asyncio.sleep(1)
+            _log.browser("click", "Submit Application button", result="attempting _gh_submit pass 3 (linkedin rescue)")
             status = await _gh_submit(target, outer_page=page, email=email)
+            _log.var("status_pass3", status, note="result after linkedin rescue submit")
 
     # ── Final fallback: DOM-inspect every validation error and ask Ollama ──────
     if status.startswith("error: form validation"):
         print(f"      → [dom-fallback] Running DOM inspection pass for unanswered required fields...")
+        _log.warn(f"Still validation errors — running DOM fallback inspection pass")
         filled = await _dom_fallback_fill_required_fields(target, profile, job_title, company, email, resume)
+        _log.var("dom_fallback_filled_count", filled, note="number of fields filled by dom fallback")
         if filled:
             await asyncio.sleep(1)
+            _log.browser("click", "Submit Application button", result="attempting _gh_submit pass 4 (dom fallback)")
             status = await _gh_submit(target, outer_page=page, email=email)
+            _log.var("status_pass4", status, note="result after dom fallback submit")
 
+    if status == "applied":
+        _log.ok(f"Application submitted successfully: {company} / {job_title}")
+    elif status.startswith("error"):
+        _log.err(f"Application failed: {status}", exc=None)
+    else:
+        _log.warn(f"Application status uncertain: {status}", exc=None)
+    _log.ret("_fill_greenhouse", status)
     return status
 
 

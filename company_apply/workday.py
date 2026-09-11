@@ -9,6 +9,13 @@ from typing import Optional
 
 from playwright.async_api import async_playwright, Page, Frame, BrowserContext
 
+try:
+    from apply_logger import log as _log
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent.parent))
+    from apply_logger import log as _log
+
 # ── Imports from sibling modules ────────────────────────────────────────────────
 from .common import (
     answer_for,
@@ -38,6 +45,7 @@ async def _wd_fill_field(page: Page, automation_id: str, value: str) -> bool:
     In Workday the automation-id is usually on a container DIV, so we look
     for the actual <input>/<textarea> inside that container.
     """
+    _log.browser("fill_field", automation_id, value=value)
     if not value:
         return False
     try:
@@ -48,12 +56,14 @@ async def _wd_fill_field(page: Page, automation_id: str, value: str) -> bool:
             if tag in ("input", "textarea"):
                 await loc.triple_click()
                 await loc.fill(value)
+                _log.browser("fill_field", automation_id, result=f"ok via direct {tag}")
                 return True
             # Container div — find the input inside it
             inp = loc.locator("input, textarea").first
             if await inp.count() > 0 and await inp.is_visible(timeout=1000):
                 await inp.triple_click()
                 await inp.fill(value)
+                _log.browser("fill_field", automation_id, result="ok via container input/textarea")
                 return True
         # Fallback: formField- container pattern (Adobe / most Workday portals)
         container = page.locator(f"[data-automation-id='formField-{automation_id}']").first
@@ -62,9 +72,11 @@ async def _wd_fill_field(page: Page, automation_id: str, value: str) -> bool:
             if await inp.count() > 0 and await inp.is_visible(timeout=1000):
                 await inp.triple_click()
                 await inp.fill(value)
+                _log.browser("fill_field", automation_id, result="ok via formField- container")
                 return True
     except Exception:
         pass
+    _log.warn(f"_wd_fill_field: all strategies failed for automation_id={automation_id!r}")
     return False
 
 
@@ -74,6 +86,7 @@ async def _wd_dropdown(page: Page, automation_id: str, value: str) -> bool:
     Tries the direct automation-id, then the formField- container pattern.
     Uses force=True throughout — Workday elements often fail is_visible() checks.
     """
+    _log.browser("dropdown", automation_id, value=value)
     if not value:
         return False
     candidates = [
@@ -92,6 +105,7 @@ async def _wd_dropdown(page: Page, automation_id: str, value: str) -> bool:
             for exact in (True, False):
                 for opt_sel in ("[data-automation-id='promptOption']", "[role='option']", "li[tabindex]"):
                     opts = await page.locator(opt_sel).all()
+                    _log.browser("dropdown", automation_id, result=f"options found: {len(opts)} via {opt_sel!r} exact={exact}")
                     for opt in opts:
                         try:
                             text = (await opt.inner_text()).strip()
@@ -99,13 +113,16 @@ async def _wd_dropdown(page: Page, automation_id: str, value: str) -> bool:
                             if match:
                                 await opt.click(force=True)
                                 await asyncio.sleep(0.3)
+                                _log.browser("dropdown", automation_id, result=f"matched option={text!r}")
                                 return True
                         except Exception:
                             continue
             await page.keyboard.press("Escape")
+            _log.warn(f"_wd_dropdown: no match found for automation_id={automation_id!r} value={value!r}")
             return False
         except Exception:
             pass
+    _log.warn(f"_wd_dropdown: all candidates failed for automation_id={automation_id!r}")
     return False
 
 
@@ -143,29 +160,42 @@ async def _wd_multiselect_first(page: Page, container_aid: str) -> bool:
 async def _wd_next(page: Page) -> bool:
     """Click the Next button in Workday multi-step form."""
     # pageFooterNextButton = Adobe/most Workday; bottom-navigation-next-btn = older portals
+    url_before = page.url
+    _log.browser("click", "Next button", result=f"url_before={url_before[:80]}")
     for aid in ("pageFooterNextButton", "bottom-navigation-next-btn", "next-btn", "saveAndContinueButton"):
         try:
             btn = page.locator(f"[data-automation-id='{aid}']").first
             if await btn.count() > 0 and await btn.is_visible(timeout=2000):
                 await btn.click()
                 await _wd_wait_ready(page)
+                url_after = page.url
+                _log.browser("click", f"Next [{aid}]", result=f"url_after={url_after[:80]}")
                 return True
         except Exception:
             pass
+    _log.warn("_wd_next: no Next button found")
     return False
 
 
 async def _wd_upload_resume(page: Page, resume: Optional[Path]) -> None:
     """Upload resume via Workday file input (data-automation-id='file-upload-input-ref')."""
-    if not resume or not resume.exists():
+    _log.var("resume_path", str(resume) if resume else None)
+    if not resume:
+        _log.null("resume", reason="resume path is None — not uploading")
+        return
+    if not resume.exists():
+        _log.null("resume", reason=f"resume file does not exist: {resume}")
         return
     try:
         file_input = page.locator("[data-automation-id='file-upload-input-ref']").first
         if await file_input.count() > 0:
             await file_input.set_input_files(str(resume))
             await asyncio.sleep(1.5)
-    except Exception:
-        pass
+            _log.ok(f"Resume uploaded: {resume.name}")
+        else:
+            _log.warn("_wd_upload_resume: file-upload-input-ref not found on page")
+    except Exception as e:
+        _log.err("_wd_upload_resume failed", exc=e)
 
 
 async def _wd_fill_input(page: Page, aid: str, val: str) -> bool:
@@ -224,6 +254,7 @@ async def _wd_fill_date(page: Page, aid: str, month: str, year: str) -> bool:
 
 async def _wd_my_information(page: Page, profile: dict, email: str, resume: Optional[Path]) -> None:
     """Fill Workday 'My Information' step. Works for both guest and authenticated flows."""
+    _log.step("Workday: My Information")
     await _wd_upload_resume(page, resume)
 
     # Wait for the form to actually be rendered before trying to fill
@@ -243,6 +274,15 @@ async def _wd_my_information(page: Page, profile: dict, email: str, resume: Opti
     loc   = profile.get("location", "")
     city  = loc.split(",")[0].strip() if loc else ""
     country = profile.get("country") or "United States"
+
+    _log.var("first_name", first); not first and _log.null("first_name", reason="name not in profile")
+    _log.var("last_name", last);   not last  and _log.null("last_name",  reason="name not in profile")
+    _log.var("email", email);      not email and _log.null("email", reason="email param empty")
+    _log.var("phone", profile.get("phone", "")); not profile.get("phone") and _log.null("phone", reason="phone not in profile")
+    _log.var("address", profile.get("address_line1", "")); not profile.get("address_line1") and _log.null("address", reason="address_line1 not in profile")
+    _log.var("city", city);       not city    and _log.null("city", reason="no city parsed from location")
+    _log.var("state", loc.split(",")[1].strip() if "," in loc else ""); not ("," in loc) and _log.null("state", reason="no state parsed from location")
+    _log.var("country", country)
 
     for country_aid in ("country", "addressCountry"):
         if await _wd_dropdown(page, country_aid, country):
@@ -441,6 +481,7 @@ async def _wd_my_information(page: Page, profile: dict, email: str, resume: Opti
 
 async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -> None:
     """Fill Workday 'My Experience' step — work history + education + resume upload."""
+    _log.step("Workday: My Experience")
     # Upload resume first (early attempt), then retry at end after field fills
     await _wd_upload_resume(page, resume)
     await asyncio.sleep(0.5)
@@ -458,6 +499,20 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
     end_yr    = profile.get("work_end_year")     # None = not set; skip end date fill if missing
     currently_raw = profile.get("currently_employed", False)
     currently_employed = currently_raw is True or str(currently_raw).lower() in ("true", "yes", "1")
+
+    _log.var("title", title)
+    _log.var("company", company)
+    _log.var("school", school);          not school         and _log.null("school", reason="not in profile")
+    _log.var("degree", degree);          not degree         and _log.null("degree", reason="not in profile")
+    _log.var("field_of_study", field_of_study); not field_of_study and _log.null("field_of_study", reason="not in profile")
+    _log.var("grad_yr", grad_yr)
+    _log.var("start_month", start_month)
+    _log.var("start_yr", start_yr)
+    _log.var("end_month", end_month);    end_month is None  and _log.null("end_month", reason="not in profile")
+    _log.var("end_yr", end_yr);          end_yr    is None  and _log.null("end_yr", reason="not in profile")
+    _log.var("currently_employed", currently_employed)
+    if not currently_employed and (not end_month or not end_yr):
+        _log.null("end_date", reason="currently_employed=False but end_month/end_yr not set")
 
     # --- Work Experience fields ---
     # Wait for the Work Experience section to render
@@ -704,6 +759,7 @@ async def _wd_my_experience(page: Page, profile: dict, resume: Optional[Path]) -
 
 async def _wd_questions(page: Page, profile: dict, email: str) -> None:
     """Fill Workday 'Application Questions' step — dropdowns, radios, text inputs."""
+    _log.step("Workday: Application Questions")
     needs_sponsorship = profile.get("needs_sponsorship", False)
     open_to_relocation = profile.get("open_to_relocation", True)
 
@@ -718,8 +774,10 @@ async def _wd_questions(page: Page, profile: dict, email: str) -> None:
                 await inp.get_attribute("placeholder") or ""
             )
             val = answer_for(label, profile, email)
+            _log.var(f"question_input", label, note=f"answer={val!r}")
             if val:
                 await inp.fill(val)
+                _log.browser("fill", label, result=f"filled={val!r}")
         except Exception:
             pass
 
@@ -812,10 +870,12 @@ async def _wd_questions(page: Page, profile: dict, email: str) -> None:
                 await trigger_el.scroll_into_view_if_needed()
             except Exception:
                 pass
+            _log.var("question_dropdown", label[:70], note=f"want={want}")
             await trigger_el.click(force=True)
             await asyncio.sleep(1.0)  # Give dropdown time to animate open
             picked = await _pick_option(want)
             await asyncio.sleep(0.3)
+            _log.browser("dropdown_answer", label[:70], result=f"{want} ({'ok' if picked else 'fallback'})")
             print(f"          [Q] '{label[:70]}' → {want} ({'ok' if picked else 'fallback'})", flush=True)
             return picked
         except Exception:
@@ -1288,9 +1348,13 @@ async def _wd_questions(page: Page, profile: dict, email: str) -> None:
 
 async def _wd_voluntary(page: Page, profile: dict = None) -> None:
     """Fill Workday 'Voluntary Disclosures' step (EEO, gender, veteran, disability)."""
+    _log.step("Workday: Voluntary Disclosures")
     _prof = profile or {}
     _gender_val = (_prof.get("gender") or "Male").strip().lower()       # "male" or "female"
     _race_val   = (_prof.get("race") or "Asian").strip().lower()        # "asian", "white", etc.
+    _log.var("gender", _gender_val)
+    _log.var("ethnicity", _race_val)
+    _log.var("veteran", "not a veteran (hardcoded)")
 
     # Keywords for each field type — order matters (most specific first)
     _VETERAN_KWS  = ("not a veteran", "i am not a veteran", "i have not served",
@@ -2042,6 +2106,7 @@ async def _wd_submit(page: Page) -> str:
     Prints all visible buttons + URL before clicking so we can debug what's actually on screen.
     Uses URL change as the primary signal that submission happened.
     """
+    _log.step("Workday: Submit")
     _confirm_words = ("thank you", "application submitted", "application received",
                       "we'll be in touch", "your application", "successfully submitted",
                       "application complete")
@@ -2069,6 +2134,7 @@ async def _wd_submit(page: Page) -> str:
             except Exception:
                 pass
         print(f"          [Submit] Visible buttons: {', '.join(btn_labels[:8])}", flush=True)
+        _log.state(page_url=url_before, visible_buttons=btn_labels[:8])
     except Exception:
         pass
 
@@ -2095,6 +2161,7 @@ async def _wd_submit(page: Page) -> str:
                 continue
             btn_text = (await btn.inner_text()).strip().lower()
             url_before = page.url
+            _log.browser("click", f"submit button [{aid}]", result=f"url_before={url_before[:60]}")
             await btn.click()
             await asyncio.sleep(SUBMIT_WAIT)
 
@@ -2102,18 +2169,23 @@ async def _wd_submit(page: Page) -> str:
             url_after = page.url
             if url_after != url_before:
                 print(f"          [Submit] URL changed → {url_after[:80]}", flush=True)
+                _log.nav(url_after, status="redirected", title="post-submit page")
                 body = (await page.inner_text("body")).lower()
                 if any(w in body for w in _confirm_words):
+                    _log.ok("Workday submit: application confirmed via body text")
                     return "applied"
+                _log.warn(f"Workday submit: URL changed but no confirm text — btn={btn_text!r}")
                 return f"submitted (unconfirmed — url changed after '{btn_text}')"
 
             # Secondary check: confirmation words in body
             body = (await page.inner_text("body")).lower()
             if any(w in body for w in _confirm_words):
+                _log.ok("Workday submit: confirmed via body text (URL unchanged)")
                 return "applied"
 
             # URL didn't change and no confirmation — the click didn't submit
             print(f"          [Submit] Clicked '{btn_text}' but URL unchanged — not submitted", flush=True)
+            _log.warn(f"Workday submit: clicked {btn_text!r} but URL unchanged — not submitted")
         except Exception:
             pass
 
@@ -2123,13 +2195,16 @@ async def _wd_submit(page: Page) -> str:
             btn = page.locator(sel).last
             if await btn.count() > 0 and await btn.is_visible(timeout=2000):
                 url_before = page.url
+                _log.browser("click", f"submit fallback [{sel}]", result=f"url_before={url_before[:60]}")
                 await btn.click()
                 await asyncio.sleep(SUBMIT_WAIT)
                 if page.url != url_before:
+                    _log.ok("Workday submit: URL changed after fallback click")
                     return "submitted (unconfirmed — url changed)"
     except Exception:
         pass
 
+    _log.err("Workday submit: no button triggered navigation — submit failed")
     return "error: submit did not navigate — check /tmp/wd_submit_debug.png"
 
 
@@ -2306,6 +2381,7 @@ async def _fill_workday(
     new_pages: live list populated by ctx.on("page", ...) — used to detect
     popups that open when 'Apply Manually' is clicked.
     """
+    _log.step(f"Workday: Fill Application — {company}")
     print(f"          [Workday] Waiting for page load...", flush=True)
     await _wd_wait_ready(page, timeout=30000)
 
@@ -2373,9 +2449,12 @@ async def _fill_workday(
         try:
             current = await _detect_step()
             if current == "Review":
+                _log.info(f"_fill_workday: reached Review — skipping remaining steps")
                 break
             if current and current != step_name:
+                _log.info(f"_fill_workday: detected step={current!r}, expected={step_name!r} — skipping")
                 continue
+            _log.info(f"_fill_workday: executing step={step_name!r}")
             print(f"          [Workday] Step: {step_name}...", flush=True)
             await fn()
             await asyncio.sleep(0.8)
@@ -2388,9 +2467,12 @@ async def _fill_workday(
             current = await _detect_step()
             if current == step_name:
                 print(f"          [Workday] ✗ '{step_name}' has validation errors — stopping", flush=True)
+                _log.err(f"_fill_workday: step {step_name!r} validation failed — page did not advance")
                 return f"error: Workday {step_name} validation failed"
+            _log.ok(f"_fill_workday: step {step_name!r} completed → now on {current!r}")
         except Exception as e:
             print(f"          [Workday] {step_name} step warning: {e}", flush=True)
+            _log.err(f"_fill_workday: step {step_name!r} raised exception", exc=e)
 
     # Handle CC-305 "Voluntary Self-Identification of Disability" form that Workday
     # shows after the SI disability radio — it requires Name + Date before advancing.

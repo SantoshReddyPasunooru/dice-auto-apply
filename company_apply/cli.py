@@ -20,6 +20,18 @@ except ImportError:
 
 load_dotenv()
 
+try:
+    from apply_logger import log as _log
+except ImportError:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent.parent))
+    try:
+        from apply_logger import log as _log
+    except ImportError:
+        class _NullLog:
+            def __getattr__(self, _): return lambda *a, **k: None
+        _log = _NullLog()
+
 # ── Imports from sibling modules ────────────────────────────────────────────────
 from .common import (
     add_company_interactive,
@@ -59,13 +71,21 @@ async def _loaded_job_rejection_reason(
     max_required_years: int,
     allowed_levels: Optional[list[str]] = None,
 ) -> str | None:
+    _log.fn("_loaded_job_rejection_reason", title=title,
+            max_required_years=max_required_years, allowed_levels=allowed_levels)
     try:
         description = await page.locator("body").inner_text(timeout=5000)
     except Exception:
         description = ""
-    return early_career_rejection_reason(
+        _log.warn("Could not read page body for rejection reason check")
+    result = early_career_rejection_reason(
         title, description, max_required_years, allowed_levels
     )
+    if result:
+        _log.skip(f"Job rejected: {result}  title={title!r}")
+    else:
+        _log.var("rejection_reason", result, note="job eligible")
+    return result
 
 async def apply_to_company(
     company_rec: dict,
@@ -87,12 +107,23 @@ async def apply_to_company(
     applied_urls = load_applied_urls(email)
     max_required_years = int(profile.get("max_required_years", 4))
 
+    _log.session_start(company=company, profile=email, script="company_apply/cli.py")
+    _log.set_context(company=company, profile=email)
+    _log.fn("apply_to_company", company=company, ats=ats, email=email,
+            keywords=keywords, locations=locations, posted_days=posted_days,
+            experience=experience, dry_run=dry_run, max_jobs=max_jobs)
+    _log.var("slug", slug)
+    _log.var("careers_url", c_url)
+    _log.var("max_required_years", max_required_years)
+    _log.db("read", "applied_urls", count=len(applied_urls))
+
     # Show resume folder at startup; actual resume picked per-job by title
     try:
         _rd = json.loads(RESUMES_JSON.read_text()) if RESUMES_JSON.exists() else {}
         _resume_folder = _rd.get(email, {}).get("resume_folder", "")
     except Exception:
         _resume_folder = ""
+        _log.warn("Could not read resumes.json for resume_folder")
 
     def _fmt(lst): return ", ".join(lst) if lst else "any"
     print(f"\n{'─'*62}")
@@ -138,7 +169,9 @@ async def apply_to_company(
     _API_ATS = {"workday", "greenhouse", "lever", "stripe"}
     pre_fetched_jobs: Optional[list] = None
 
+    _log.step(f"Fetch jobs  ({ats})")
     if ats in _API_ATS:
+        _log.info(f"API-based ATS — fetching before browser launch  ats={ats}")
         print("  Fetching job listings...", flush=True)
         if ats == "workday":
             pre_fetched_jobs = workday_list_jobs(
@@ -155,9 +188,11 @@ async def apply_to_company(
             pre_fetched_jobs = stripe_list_jobs()
 
         all_jobs = list(pre_fetched_jobs)
+        _log.var("all_jobs_count", len(all_jobs), note="raw from API")
         print(f"  Found {len(all_jobs)} open role(s).")
         already_done = sum(1 for j in all_jobs if j["url"] in applied_urls)
         if already_done:
+            _log.var("already_applied_count", already_done)
             print(f"  Already applied / exhausted: {already_done} (skipped)")
 
         def _run_filter(kw, locs, days, exp, wt, us):
@@ -167,38 +202,50 @@ async def apply_to_company(
             )
 
         jobs = _run_filter(keywords, locations, posted_days, experience, work_type, us_only)
+        _log.var("eligible_jobs_count", len(jobs), note="after all filters")
         print(f"  {len(jobs)} eligible this run (match filters + not yet applied).")
 
         if not jobs and experience:
+            _log.warn(f"Experience filter matched 0 roles  experience={experience}")
             print(f"\n  ✗  Experience filter [{', '.join(experience)}] matched 0 roles at {company_rec['name']}.")
             print(f"     Skipping — not falling back to unfiltered results.")
         if not jobs and posted_days:
+            _log.warn(f"Date filter matched 0 roles, retrying without date  posted_days={posted_days}")
             print(f"\n  ↩  Date filter (last {posted_days}d) matched 0 roles.")
             print(f"     Retrying without date restriction (keeping keywords/location)...")
             jobs = _run_filter(keywords, locations, None, experience, work_type, us_only)
             if jobs:
+                _log.ok(f"Found {len(jobs)} roles after dropping date filter")
                 print(f"  ✓  {len(jobs)} roles found — date filter dropped.\n")
             else:
+                _log.warn("Still 0 after dropping date filter")
                 print(f"  Still 0 after dropping date.")
         if not jobs and locations:
+            _log.warn(f"Location filter matched 0 roles, retrying without location  locations={locations}")
             print(f"\n  ↩  Location filter [{', '.join(locations)}] matched 0 roles.")
             print(f"     Retrying without location restriction (keeping keywords)...")
             jobs = _run_filter(keywords, [], None, experience, work_type, us_only)
             if jobs:
+                _log.ok(f"Found {len(jobs)} roles after dropping location filter")
                 print(f"  ✓  {len(jobs)} roles found — location filter dropped.\n")
             else:
+                _log.warn("Still 0 after dropping location filter")
                 print(f"  Still 0 after dropping location.")
         if not jobs and keywords:
+            _log.warn(f"Retrying with keywords only  keywords={keywords}")
             print(f"\n  ↩  Retrying with keywords only: {', '.join(keywords)}")
             jobs = _run_filter(keywords, [], None, experience, [], us_only)
             if jobs:
+                _log.ok(f"Found {len(jobs)} roles matching keywords only")
                 print(f"  ✓  {len(jobs)} roles match keywords.\n")
             else:
+                _log.warn("0 roles match keywords either — company has no matching open roles")
                 print(f"  0 roles match keywords either. This company has no matching open roles.")
 
         print()
         if max_jobs > 0:
             jobs = jobs[:max_jobs]
+            _log.var("jobs_after_max_cap", len(jobs), note=f"capped at {max_jobs}")
 
         if dry_run:
             for i, job in enumerate(jobs, 1):
@@ -223,11 +270,15 @@ async def apply_to_company(
     # Workday: remind user to set up session if not done yet
     if ats == "workday":
         tenant = company_rec.get("tenant", "")
+        _log.var("workday_tenant", tenant)
         if not _workday_session_exists(user_data, tenant):
+            _log.warn(f"No Workday session found for {company} — applying as guest")
             print(f"\n  ⚠  No Workday session found for {company}.")
             print(f"     Applying as guest (slower, more brittle).")
             print(f"     For faster authenticated apply, run once:")
             print(f"       python3 company_apply.py --company {company.lower()} --setup-workday\n")
+        else:
+            _log.ok(f"Workday session exists for {company}")
 
     # Clear any stale Chrome singleton locks left by crashed previous runs
     import subprocess as _sp
@@ -235,6 +286,9 @@ async def apply_to_company(
     import time as _t; _t.sleep(0.5)
     for _lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
         (user_data / _lock).unlink(missing_ok=True)
+
+    _log.step("Launch Browser")
+    _log.var("user_data_dir", str(user_data))
 
     async with async_playwright() as pw:
         ctx: BrowserContext = await pw.chromium.launch_persistent_context(
@@ -245,10 +299,13 @@ async def apply_to_company(
             locale="en-US",
         )
 
+        _log.ok("Browser context launched")
+
         # Inject saved Workday cookies so the authenticated session is restored
         # even if Chrome didn't flush them to the profile on a previous run.
         if ats == "workday":
             _sf = _workday_session_file(user_data, company_rec.get("tenant", ""))
+            _log.var("workday_session_file", str(_sf))
             if _sf.exists():
                 try:
                     import json as _json
@@ -256,14 +313,22 @@ async def apply_to_company(
                     _cookies = _sdata.get("cookies", [])
                     if _cookies:
                         await ctx.add_cookies(_cookies)
+                        _log.ok(f"Loaded {len(_cookies)} Workday session cookies")
                         print(f"  [Workday] ✓ Loaded {len(_cookies)} session cookies", flush=True)
+                    else:
+                        _log.warn("Workday session file exists but contains no cookies")
                 except Exception as _ce:
+                    _log.err(f"Workday session cookie load failed", exc=_ce)
                     print(f"  [Workday] Session cookie load failed: {_ce}", flush=True)
+            else:
+                _log.warn(f"No Workday session file found at {_sf}")
 
         page: Page = await ctx.new_page()
+        _log.ok("New browser page created")
 
         # ── Fetch job list (browser-required ATS: Ashby, generic) ────────────────
         if pre_fetched_jobs is None:
+            _log.step(f"Browser job fetch  ({ats})")
             print("  Fetching job listings...", flush=True)
             if ats == "ashby":
                 jobs = await ashby_list_jobs(page, slug)
@@ -273,9 +338,11 @@ async def apply_to_company(
         # Filter + fallback only needed for browser-fetched ATS (Ashby / generic)
         if pre_fetched_jobs is None:
             all_jobs = list(jobs)
+            _log.var("all_jobs_count", len(all_jobs), note="browser-fetched")
             print(f"  Found {len(all_jobs)} open role(s).")
             already_done = sum(1 for j in all_jobs if j["url"] in applied_urls)
             if already_done:
+                _log.var("already_applied_count", already_done)
                 print(f"  Already applied / exhausted: {already_done} (skipped)")
 
             def _run_filter(kw, locs, days, exp, wt, us):
@@ -319,10 +386,12 @@ async def apply_to_company(
                 jobs = jobs[:max_jobs]
 
         if not jobs:
+            _log.skip("No eligible jobs — nothing to apply to")
             print("  Nothing to apply to. Done.")
             await ctx.close()
             return
 
+        _log.step(f"Apply loop  ({len(jobs)} jobs)")
         applied = skipped = errors = 0
 
         for i, job in enumerate(jobs, 1):
@@ -332,6 +401,15 @@ async def apply_to_company(
 
             loc_str = job.get("location", "")
             resume  = get_resume(profile, email, title)
+            _log.set_context(company=company, profile=email, job=title)
+            _log.step(f"Job {i}/{len(jobs)}: {title}")
+            _log.var("job_url", job_url)
+            _log.var("job_ats", job_ats)
+            _log.var("job_location", loc_str)
+            _log.var("resume", resume.name if resume else None,
+                     note="None means no resume upload")
+            if resume is None:
+                _log.null("resume", reason=f"no resume matched title: {title!r}")
             _job_start = time.perf_counter()
             print(f"  [{i}/{len(jobs)}] {title}" + (f"  [{loc_str}]" if loc_str else ""))
             print(f"          {job_url}")
@@ -350,62 +428,89 @@ async def apply_to_company(
 
             try:
                 if job_ats == "workday":
+                    _log.step("Dispatch: Workday")
                     # Keep listener active through the whole application so that
                     # popups opened by the gate click ('Apply Manually') are captured.
                     _new_pages: list = []
                     _wd_listener = lambda p: _new_pages.append(p)
                     ctx.on("page", _wd_listener)
                     try:
+                        _log.nav(job_url, status="navigating")
                         await page.goto(job_url, wait_until="domcontentloaded", timeout=0)
-                    except Exception:
-                        pass
+                        _log.nav(job_url, status="loaded")
+                    except Exception as _ne:
+                        _log.warn(f"goto failed (continuing anyway): {_ne}")
                     await asyncio.sleep(1)  # brief settle before gate
                     rejection_reason = await _loaded_job_rejection_reason(
                         page, title, max_required_years, experience
                     )
                     if rejection_reason:
                         status = f"skipped - {rejection_reason}"
+                        _log.skip(f"Workday: {rejection_reason}")
                     else:
+                        _log.step("Filling Workday form")
                         status = await _fill_workday(page, profile, email, resume, company,
                                                      new_pages=_new_pages)
                     ctx.remove_listener("page", _wd_listener)
                 elif job_ats in ("greenhouse", "stripe"):
+                    _log.step(f"Dispatch: {job_ats}")
+                    _log.nav(job_url, status="navigating")
                     await page.goto(job_url, wait_until="load", timeout=0)
+                    _log.nav(job_url, status="loaded")
                     rejection_reason = await _loaded_job_rejection_reason(
                         page, title, max_required_years, experience
                     )
                     status = (f"skipped - {rejection_reason}" if rejection_reason else
                               await _fill_greenhouse(page, profile, email, resume, title, company))
                 elif job_ats == "lever":
+                    _log.step("Dispatch: Lever")
+                    _log.nav(job_url, status="navigating")
                     await page.goto(job_url, wait_until="load", timeout=0)
+                    _log.nav(job_url, status="loaded")
                     rejection_reason = await _loaded_job_rejection_reason(
                         page, title, max_required_years, experience
                     )
                     status = (f"skipped - {rejection_reason}" if rejection_reason else
                               await _fill_lever(page, profile, email, resume))
                 elif job_ats == "ashby":
+                    _log.step("Dispatch: Ashby")
+                    _log.nav(job_url, status="navigating")
                     await page.goto(job_url, wait_until="load", timeout=0)
+                    _log.nav(job_url, status="loaded")
                     rejection_reason = await _loaded_job_rejection_reason(
                         page, title, max_required_years, experience
                     )
                     status = (f"skipped - {rejection_reason}" if rejection_reason else
                               await _fill_ashby(page, profile, email, resume))
                 else:
+                    _log.warn(f"Unsupported ATS: {job_ats!r}")
                     await page.goto(job_url, wait_until="load", timeout=0)
                     status = "skipped - unsupported ATS"
 
                 # If unconfirmed, double-check via Gmail
                 if status == "submitted (unconfirmed)":
+                    _log.info("Checking Gmail for confirmation email")
                     if check_gmail_confirmation(company, title):
                         status = "applied (gmail confirmed)"
                         _elapsed = time.perf_counter() - _job_start
+                        _log.ok(f"Gmail confirmed  elapsed={_elapsed:.0f}s")
                         print(f"          → {status} ✓ confirmation email found  ⏱ {_elapsed:.0f}s\n")
                     else:
+                        _log.warn("Gmail confirmation NOT found — status stays unconfirmed")
                         print(f"          → {status}\n")
                 else:
                     _elapsed = time.perf_counter() - _job_start
+                    _log.var("final_status", status)
+                    _log.var("elapsed_seconds", round(_elapsed, 1))
+                    if "applied" in status or "submitted" in status:
+                        _log.ok(f"Job complete: {status}  elapsed={_elapsed:.0f}s")
+                    elif "skipped" in status:
+                        _log.skip(status)
+                    else:
+                        _log.warn(f"Unexpected status: {status}")
                     print(f"          → {status}  ⏱ {_elapsed:.0f}s\n")
                 log_applied(company, job_ats, title, job_url, status, email, location=loc_str)
+                _log.db("write", "applied_log", value=status)
 
                 if "applied" in status or "submitted" in status:
                     applied += 1
@@ -417,6 +522,7 @@ async def apply_to_company(
             except Exception as exc:
                 err = str(exc)[:80]
                 _elapsed = time.perf_counter() - _job_start
+                _log.err(f"Job {i} exception: {err}  elapsed={_elapsed:.0f}s", exc=exc)
                 print(f"          → error: {err}  ⏱ {_elapsed:.0f}s\n")
                 log_applied(company, job_ats, title, job_url, f"error: {err}", email, location=loc_str)
                 errors += 1
@@ -453,6 +559,8 @@ async def apply_to_company(
 
         await ctx.close()
 
+    _log.session_end(applied=applied, skipped=skipped, errors=errors)
+    _log.clear_context()
     print(f"\n{'─'*62}")
     print(f"  {company} summary:")
     print(f"    Applied  : {applied}")
@@ -465,36 +573,49 @@ async def apply_to_company(
 # ── Profile setup sub-command ───────────────────────────────────────────────────
 
 def setup_profiles():
+    _log.fn("setup_profiles")
     all_p = load_all_profiles()
+    _log.var("profiles_count", len(all_p))
     if not all_p:
+        _log.warn("No profiles found in profiles.json")
         print("No profiles found in profiles.json.")
         return
     for em, p in all_p.items():
+        _log.info(f"Ensuring profile complete for {em}")
         print(f"\n  Profile: {p.get('name', em)} <{em}>")
         ensure_profile_complete(p, em)
+    _log.ok("All profiles up to date")
     print("All profiles up to date.")
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────────
 
 def _pick_profile(all_profiles: dict, arg_email: Optional[str]) -> Optional[str]:
+    _log.fn("_pick_profile", arg_email=arg_email, profiles_count=len(all_profiles))
     emails = list(all_profiles.keys())
     if not emails:
+        _log.null("emails", reason="no profiles loaded")
         return None
     if arg_email:
         if arg_email in all_profiles:
+            _log.ok(f"Profile matched by email: {arg_email}")
             return arg_email
+        _log.warn(f"Profile not found: {arg_email!r}")
         print(f"  Profile '{arg_email}' not found.")
         return None
     if len(emails) == 1:
+        _log.ok(f"Single profile auto-selected: {emails[0]}")
         return emails[0]
     print("  Select profile:")
     for i, em in enumerate(emails, 1):
         print(f"    {i}. {all_profiles[em].get('name', '?')} <{em}>")
     try:
         idx = int(input("  Choice [1]: ").strip() or "1") - 1
-        return emails[max(0, min(idx, len(emails) - 1))]
+        chosen = emails[max(0, min(idx, len(emails) - 1))]
+        _log.ok(f"User selected profile: {chosen}")
+        return chosen
     except (ValueError, EOFError):
+        _log.warn("Profile selection failed — defaulting to first")
         return emails[0]
 
 
@@ -598,21 +719,27 @@ def main():
         return
 
     # ── Main apply flow ───────────────────────────────────────────────────────
+    _log.step("CLI: main() — apply flow")
     all_profiles = load_all_profiles()
+    _log.var("profiles_loaded", len(all_profiles))
     if not all_profiles:
+        _log.err("No profiles found in profiles.json")
         print("No profiles found. Add entries to profiles.json first.")
         sys.exit(1)
 
     email = _pick_profile(all_profiles, args.profile)
     if not email:
+        _log.err("No profile selected — aborting")
         sys.exit(1)
 
     profile = all_profiles[email].copy()
     profile["email"] = email
+    _log.var("selected_email", email)
     print(f"\n  Profile: {profile.get('name')} <{email}>")
     profile = ensure_profile_complete(profile, email)
     if args.max_required_years is not None:
         profile["max_required_years"] = max(0, min(4, args.max_required_years))
+        _log.var("max_required_years_override", profile["max_required_years"])
 
     # ── Pick company ──────────────────────────────────────────────────────────
     db = load_company_db()
@@ -631,9 +758,11 @@ def main():
 
     company_rec = find_company(company_name, db)
     if not company_rec:
+        _log.err(f"Company not found in DB: {company_name!r}")
         print(f"\n  '{company_name}' not found in company_careers_db.json.")
         print("  Run: python company_apply.py --add   to add it.")
         sys.exit(1)
+    _log.ok(f"Company found: {company_rec['name']}  ats={company_rec.get('ats')}")
 
     # ── Keywords ──────────────────────────────────────────────────────────────
     if getattr(args, "all_roles", False):

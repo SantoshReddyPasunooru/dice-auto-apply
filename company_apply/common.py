@@ -818,7 +818,7 @@ def load_applied_urls(email: str = "") -> set[str]:
       • Successfully applied/submitted (never retry)
       • Errored >= _MAX_ERROR_RETRIES times without ever succeeding (give up)
     """
-    _log.db("read", "external_applied_jobs.csv", note=f"email={email!r}")
+    _log.db("read", "external_applied_jobs.csv", value=f"email={email!r}")
     _log.var("applied_log_path", str(APPLIED_LOG_PATH))
     _init_log()
     try:
@@ -846,8 +846,8 @@ def load_applied_urls(email: str = "") -> set[str]:
                  if n >= _MAX_ERROR_RETRIES and url not in successes}
 
     skip_urls = successes | exhausted
-    _log.db("read", "external_applied_jobs.csv", count=len(skip_urls),
-            note=f"successes={len(successes)} exhausted={len(exhausted)}")
+    _log.db("read", "external_applied_jobs.csv", count=len(skip_urls))
+    _log.var("successes", len(successes), note=f"exhausted={len(exhausted)}")
     if exhausted:
         print(f"  ⚠  {len(exhausted)} job(s) skipped — errored {_MAX_ERROR_RETRIES}+ times "
               f"(likely require a cover letter / portfolio — not retrying).")

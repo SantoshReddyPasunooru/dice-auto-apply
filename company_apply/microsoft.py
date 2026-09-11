@@ -53,6 +53,7 @@ def microsoft_list_jobs(keywords: list = None, num: int = 50) -> list:
     Returns a list of job dicts compatible with the apply pipeline.
     """
     import requests
+    import time
     _log.fn("microsoft_list_jobs", keywords=keywords, num=num)
 
     q = " ".join(keywords) if keywords else ""
@@ -63,15 +64,33 @@ def microsoft_list_jobs(keywords: list = None, num: int = 50) -> list:
     url = f"{base}?{params}"
 
     _log.api("GET", url)
-    try:
-        r = requests.get(url, timeout=30, headers={"Accept": "application/json"})
-        _log.api("GET", url, status=r.status_code,
-                 snippet=r.text[:120].replace("\n", " "))
-
-        if r.status_code != 200:
-            _log.err(f"microsoft_list_jobs: HTTP {r.status_code}")
+    r = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, timeout=30, headers={
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/124.0.0.0 Safari/537.36",
+            })
+            _log.api("GET", url, status=r.status_code,
+                     snippet=r.text[:120].replace("\n", " "))
+            if r.status_code == 429:
+                wait = 30 * (attempt + 1)
+                _log.warn(f"microsoft_list_jobs: 429 rate-limited — waiting {wait}s "
+                          f"(attempt {attempt+1}/3)")
+                time.sleep(wait)
+                continue
+            break
+        except Exception as exc:
+            _log.err("microsoft_list_jobs request failed", exc=exc)
             return []
 
+    if r is None or r.status_code != 200:
+        _log.err(f"microsoft_list_jobs: HTTP {r.status_code if r else 'no response'}")
+        return []
+
+    try:
         data = r.json()
         positions = data.get("data", {}).get("positions", [])
         _log.var("raw_positions_count", len(positions))
@@ -223,30 +242,122 @@ async def _fill_microsoft(page: Page, profile: dict, email: str,
     _log.fn("_fill_microsoft", email=email, company=company,
             page_url=page.url, resume=str(resume) if resume else None)
 
-    # ── Guard: check sign-in wall ──────────────────────────────────────────────
-    _log.step("Microsoft: check for sign-in wall")
-    await asyncio.sleep(2)
+    _MS_LOGIN_DOMAINS = ("login.microsoftonline.com", "login.live.com",
+                         "account.microsoft.com", "login.microsoft.com")
+    _FORM_SELECTOR = '#Contact_Information_firstname, [data-test-id^="Contact_Information"]'
+    apply_url = page.url  # save in case page closes and we need to retry
+
+    async def _get_body(pg) -> str:
+        try:
+            return await pg.inner_text("body")
+        except Exception:
+            return ""
+
+    def _is_login_url(url: str) -> bool:
+        return any(d in url for d in _MS_LOGIN_DOMAINS)
+
+    async def _wait_for_form(pg) -> bool:
+        """Return True if form appeared, False on timeout."""
+        try:
+            await pg.wait_for_selector(_FORM_SELECTOR, timeout=35000)
+            return True
+        except Exception:
+            return False
+
+    # ── Guard: race between form load and page close ───────────────────────────
+    _log.step("Microsoft: check for sign-in wall / wait for form")
+
+    # Arm a close-event flag BEFORE anything async; also detect if page already closed
+    _page_closed = asyncio.Event()
+    if page.is_closed():
+        _page_closed.set()
+    else:
+        page.on("close", lambda _: _page_closed.set())
+        # Re-check immediately in case close fired between is_closed() and on()
+        if page.is_closed():
+            _page_closed.set()
+
+    # Give the page a short head-start to settle
+    await asyncio.sleep(1)
+
+    # Race: form appears  vs  page closes
+    form_task  = asyncio.create_task(_wait_for_form(page))
+    close_task = asyncio.create_task(_page_closed.wait())
+    done, pending = await asyncio.wait(
+        {form_task, close_task}, return_when=asyncio.FIRST_COMPLETED, timeout=37
+    )
+    for t in pending:
+        t.cancel()
+
     try:
-        body_text = await page.inner_text("body")
+        form_loaded = form_task in done and (not form_task.cancelled()) and bool(form_task.result())
     except Exception:
-        body_text = ""
+        form_loaded = False
 
-    if "sign in" in body_text.lower() and "submit application" not in body_text.lower():
-        _log.err("Microsoft: sign-in wall detected — session not active for this profile")
-        return "error: sign-in required — run once manually to authenticate"
+    if form_loaded:
+        _log.ok("Microsoft: form loaded (session active)")
+    else:
+        # Page closed OR timed out — sign-in is needed
+        reason = "page closed" if _page_closed.is_set() else "form not found"
+        _log.warn(f"Microsoft: sign-in required ({reason})")
+        _log.var("apply_url", apply_url)
 
-    # ── Wait for form ──────────────────────────────────────────────────────────
-    _log.step("Microsoft: wait for application form to load")
-    try:
-        await page.wait_for_selector(
-            '#Contact_Information_firstname, [data-test-id^="Contact_Information"]',
-            timeout=20000,
+        print("\n  ⚠  Microsoft sign-in required.")
+        print("  The automation browser opened but could not load the application form.")
+        print("  A new browser tab will open at the Microsoft careers site.")
+        print("  Please sign in there (Microsoft / LinkedIn / Google),")
+        print("  then press Enter here once the page is fully signed in...",
+              end="", flush=True)
+
+        # Open a new page for sign-in (original page may be closed)
+        try:
+            context = page.context
+        except Exception:
+            _log.err("Microsoft: browser context also closed — cannot recover")
+            return "error: sign-in required (context closed)"
+
+        signin_page = await context.new_page()
+        await signin_page.goto(
+            "https://apply.careers.microsoft.com/careers",
+            wait_until="domcontentloaded", timeout=30000,
         )
-        _log.ok("Microsoft: form loaded")
-    except Exception as exc:
-        _log.err("Microsoft: form not found within 20s", exc=exc)
-        _log.state(page_url=page.url, body_snippet=body_text[:200])
-        return "error: form not loaded"
+        _log.nav(signin_page.url, status="sign-in page opened")
+
+        try:
+            await asyncio.to_thread(input, "")
+        except EOFError:
+            _log.warn("Microsoft: stdin closed (non-interactive run) — "
+                      "cannot wait for manual sign-in. "
+                      "Run from a terminal to complete sign-in.")
+            await signin_page.close()
+            return "error: sign-in required (run from terminal to sign in)"
+        print()
+        _log.ok("Microsoft: user pressed Enter — checking sign-in status")
+
+        # Wait for it to settle after sign-in
+        try:
+            await signin_page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+
+        if _is_login_url(signin_page.url):
+            _log.err("Microsoft: still on login URL after user prompt")
+            await signin_page.close()
+            return "error: sign-in required"
+
+        # Navigate to the actual apply URL on the signed-in page
+        await signin_page.goto(apply_url, wait_until="domcontentloaded", timeout=30000)
+        page = signin_page   # reassign — rest of function uses `page`
+
+        # Now wait for form
+        _log.step("Microsoft: wait for application form to load (post sign-in)")
+        _log.nav(page.url, status="waiting for form")
+        if not await _wait_for_form(page):
+            body = await _get_body(page)
+            _log.err("Microsoft: form not found after sign-in")
+            _log.state(page_url=page.url, body_snippet=body[:200])
+            return "error: form not loaded after sign-in"
+        _log.ok("Microsoft: form loaded after sign-in")
 
     await asyncio.sleep(1)
 

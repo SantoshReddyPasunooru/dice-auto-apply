@@ -8,6 +8,7 @@ ATS automation split into per-system modules:
   workday.py    — Workday ATS form filler
   lever.py      — Lever ATS form filler
   ashby.py      — Ashby ATS form filler
+  microsoft.py  — Microsoft custom ATS form filler (apply.careers.microsoft.com)
   cli.py        — apply_to_company() orchestrator + CLI entry point
 """
 
@@ -15,9 +16,11 @@ from .common import *          # noqa: F401, F403
 from .common import (          # noqa: F401  private helpers tests import directly
     _is_canada_location, _is_us_location,
     applicable_companies, needtofix_companies,
+    microsoft_list_jobs,
 )
 from .greenhouse import *      # noqa: F401, F403
 from .workday import *         # noqa: F401, F403
 from .lever import *           # noqa: F401, F403
 from .ashby import *           # noqa: F401, F403
+from .microsoft import _fill_microsoft  # noqa: F401
 from .cli import apply_to_company, main, setup_profiles  # noqa: F401

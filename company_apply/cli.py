@@ -62,6 +62,7 @@ from .greenhouse import _fill_greenhouse, _start_code_watcher
 from .workday import _fill_workday, setup_workday_session, _workday_session_exists, _workday_session_file
 from .lever import _fill_lever
 from .ashby import _fill_ashby
+from .microsoft import _fill_microsoft, microsoft_list_jobs
 
 # ── Main apply loop ─────────────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ async def apply_to_company(
     # Workday, Greenhouse, Lever, Stripe all expose REST/JSON APIs.
     # Fetch + filter BEFORE launching Chrome so dry-run and no-match cases
     # never open a browser window.
-    _API_ATS = {"workday", "greenhouse", "lever", "stripe"}
+    _API_ATS = {"workday", "greenhouse", "lever", "stripe", "microsoft"}
     pre_fetched_jobs: Optional[list] = None
 
     _log.step(f"Fetch jobs  ({ats})")
@@ -186,6 +187,11 @@ async def apply_to_company(
             pre_fetched_jobs = lever_list_jobs(slug)
         elif ats == "stripe":
             pre_fetched_jobs = stripe_list_jobs()
+        elif ats == "microsoft":
+            pre_fetched_jobs = microsoft_list_jobs(
+                keywords=keywords or None,
+                num=company_rec.get("num_jobs", 50),
+            )
 
         all_jobs = list(pre_fetched_jobs)
         _log.var("all_jobs_count", len(all_jobs), note="raw from API")
@@ -482,6 +488,17 @@ async def apply_to_company(
                     )
                     status = (f"skipped - {rejection_reason}" if rejection_reason else
                               await _fill_ashby(page, profile, email, resume))
+                elif job_ats == "microsoft":
+                    _log.step("Dispatch: Microsoft")
+                    _log.nav(job_url, status="navigating")
+                    await page.goto(job_url, wait_until="domcontentloaded", timeout=0)
+                    await asyncio.sleep(2)
+                    _log.nav(job_url, status="loaded")
+                    rejection_reason = await _loaded_job_rejection_reason(
+                        page, title, max_required_years, experience
+                    )
+                    status = (f"skipped - {rejection_reason}" if rejection_reason else
+                              await _fill_microsoft(page, profile, email, resume, company))
                 else:
                     _log.warn(f"Unsupported ATS: {job_ats!r}")
                     await page.goto(job_url, wait_until="load", timeout=0)

@@ -84,7 +84,7 @@
     "slug": "deepmind-google",
     "careers_url": "https://boards.greenhouse.io/deepmind-google",
     "status": "needs_fix",
-    "fix_note": "Greenhouse board returns 404 — moved to Google-integrated careers system"
+    "fix_note": "Greenhouse board returns 404 \u2014 moved to Google-integrated careers system"
   },
   "twilio": {
     "name": "Twilio",
@@ -128,7 +128,7 @@
     "slug": "hubspot",
     "careers_url": "https://boards.greenhouse.io/hubspot",
     "status": "needs_fix",
-    "fix_note": "Greenhouse API returns 0 jobs — board may be inactive or company moved ATS"
+    "fix_note": "Greenhouse API returns 0 jobs \u2014 board may be inactive or company moved ATS"
   },
   "gitlab": {
     "name": "GitLab",
@@ -414,13 +414,10 @@
   },
   "microsoft": {
     "name": "Microsoft",
-    "ats": "workday",
-    "tenant": "microsoft",
-    "shard": 1,
-    "portal": "External",
-    "careers_url": "https://microsoft.wd1.myworkdayjobs.com/en-US/External",
-    "status": "needs_fix",
-    "fix_note": "Workday portal returns 500 — JS-only page, browser login + correct tenant not yet confirmed"
+    "ats": "microsoft",
+    "careers_url": "https://apply.careers.microsoft.com/careers",
+    "status": "active",
+    "num_jobs": 50
   },
   "salesforce": {
     "name": "Salesforce",
@@ -430,6 +427,6 @@
     "portal": "External_Career_Site",
     "careers_url": "https://salesforce.wd12.myworkdayjobs.com/en-US/External_Career_Site",
     "status": "needs_fix",
-    "fix_note": "Shard corrected from wd5 to wd12 — needs browser login session setup before applying"
+    "fix_note": "Shard corrected from wd5 to wd12 \u2014 needs browser login session setup before applying"
   }
 }

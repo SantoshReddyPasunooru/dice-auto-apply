@@ -461,6 +461,12 @@ def workday_list_jobs(
     return jobs
 
 
+def microsoft_list_jobs(keywords: list = None, num: int = 50) -> list:
+    """Re-export — actual implementation lives in company_apply/microsoft.py."""
+    from .microsoft import microsoft_list_jobs as _impl
+    return _impl(keywords=keywords, num=num)
+
+
 async def ashby_list_jobs(page: Page, slug: str) -> list[dict]:
     """Scrape Ashby job board (no public REST API)."""
     url = f"https://jobs.ashbyhq.com/{slug}"

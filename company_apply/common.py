@@ -833,13 +833,19 @@ def load_applied_urls(email: str = "") -> set[str]:
     successes: set[str] = set()
     error_counts: Counter = Counter()
 
+    # Infrastructure errors (sign-in, browser crash, context closed) are not job
+    # rejections — don't count them against the retry limit.
+    _INFRA_ERROR_MARKERS = ("sign-in", "browser closed", "context closed",
+                            "page closed", "eof", "run from terminal")
+
     for r in rows:
         url    = r["job_url"]
         status = r.get("status", "").lower()
         if any(w in status for w in ("applied", "submitted")):
             successes.add(url)
         elif "error" in status:
-            error_counts[url] += 1
+            if not any(m in status for m in _INFRA_ERROR_MARKERS):
+                error_counts[url] += 1
 
     # URLs that errored too many times and never succeeded → give up on them
     exhausted = {url for url, n in error_counts.items()

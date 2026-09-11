@@ -526,8 +526,13 @@ async def apply_to_company(
                     else:
                         _log.warn(f"Unexpected status: {status}")
                     print(f"          → {status}  ⏱ {_elapsed:.0f}s\n")
-                log_applied(company, job_ats, title, job_url, status, email, location=loc_str)
-                _log.db("write", "applied_log", value=status)
+                _INFRA_STATUSES = ("sign-in", "browser closed", "context closed",
+                                   "page closed", "eof", "run from terminal")
+                if not any(m in status.lower() for m in _INFRA_STATUSES):
+                    log_applied(company, job_ats, title, job_url, status, email, location=loc_str)
+                    _log.db("write", "applied_log", value=status)
+                else:
+                    _log.skip(f"Infrastructure error — not logged to CSV: {status}")
 
                 if "applied" in status or "submitted" in status:
                     applied += 1

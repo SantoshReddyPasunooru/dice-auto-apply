@@ -628,16 +628,33 @@ def api_linkedin_config():
     })
 
 
+def _load_applicable_names() -> list[str]:
+    """Return sorted list of applicable company names from company_careers_db.json.
+    Falls back to applicable_companies.json if the DB is missing."""
+    if COMPANY_DB_JSON.exists():
+        try:
+            raw = json.loads(COMPANY_DB_JSON.read_text())
+            names = sorted(
+                v["name"] for k, v in raw.items()
+                if isinstance(v, dict) and v.get("status", "active") == "active" and "name" in v
+            )
+            if names:
+                return names
+        except Exception:
+            pass
+    if COMPANIES_JSON.exists():
+        return json.loads(COMPANIES_JSON.read_text())
+    return []
+
+
 @app.route("/api/companies")
 def api_companies():
-    if COMPANIES_JSON.exists():
-        return jsonify(json.loads(COMPANIES_JSON.read_text()))
-    return jsonify([])
+    return jsonify(_load_applicable_names())
 
 
 @app.route("/api/company-groups")
 def api_company_groups():
-    available = json.loads(COMPANIES_JSON.read_text()) if COMPANIES_JSON.exists() else []
+    available = _load_applicable_names()
     database = json.loads(COMPANY_DB_JSON.read_text()) if COMPANY_DB_JSON.exists() else {}
     supported = [item.get("name") for item in database.values()
                  if isinstance(item, dict) and item.get("name") in available

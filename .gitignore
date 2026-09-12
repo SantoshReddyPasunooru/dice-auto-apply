@@ -23,3 +23,9 @@ __pycache__/
 # macOS
 .DS_Store
 recruiters.csv
+resumes/
+handshake_applied_jobs.csv
+linkedin_applied_jobs.csv
+external_applied_jobs.csv
+custom_answers.json
+saved_filters.json

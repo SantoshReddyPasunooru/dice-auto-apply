@@ -6,6 +6,50 @@
     "slug": "anthropic",
     "careers_url": "https://boards.greenhouse.io/anthropic"
   },
+  "meta": {
+    "name": "Meta",
+    "ats": "generic",
+    "careers_url": "https://careers.smartrecruiters.com/Meta1/"
+  },
+  "amazon": {
+    "name": "Amazon",
+    "ats": "generic",
+    "careers_url": "https://www.amazon.jobs/en/search"
+  },
+  "apple": {
+    "name": "Apple",
+    "ats": "generic",
+    "careers_url": "https://jobs.apple.com/en-us/search?location=united-states-USA"
+  },
+  "netflix": {
+    "name": "Netflix",
+    "ats": "generic",
+    "careers_url": "https://jobs.netflix.com/"
+  },
+  "google": {
+    "name": "Google",
+    "ats": "generic",
+    "careers_url": "https://www.google.com/about/careers/applications/jobs/results/"
+  },
+  "nvidia": {
+    "name": "NVIDIA",
+    "ats": "workday",
+    "tenant": "nvidia",
+    "shard": 5,
+    "portal": "NVIDIAExternalCareerSite",
+    "careers_url": "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"
+  },
+  "openai": {
+    "name": "OpenAI",
+    "ats": "ashby",
+    "slug": "openai",
+    "careers_url": "https://jobs.ashbyhq.com/openai"
+  },
+  "spacex": {
+    "name": "SpaceX",
+    "ats": "generic",
+    "careers_url": "https://jobs.jobvite.com/spacex/jobs"
+  },
   "figma": {
     "name": "Figma",
     "ats": "greenhouse",
